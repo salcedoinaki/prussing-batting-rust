@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello, Lambert!");
+    println!("Lambert ULT solver - CLI coming soon");
 }
