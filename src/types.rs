@@ -56,3 +56,20 @@ pub struct LambertSolution {
     /// Whether the solution passes feasibility checks
     pub is_feasible: bool,
 }
+
+/// Transfer geometry quantities derived from r1, r2, and direction.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferGeometry {
+    /// |r1|
+    pub r1_mag: f64,
+    /// |r2|
+    pub r2_mag: f64,
+    /// Chord length |r2 - r1|
+    pub c: f64,
+    /// Semi-perimeter (r1 + r2 + c) / 2
+    pub s: f64,
+    /// Transfer angle theta (0, 2*pi) based on direction
+    pub theta: f64,
+    /// Minimum-energy semi-major axis a_m = s / 2
+    pub a_min: f64,
+}
