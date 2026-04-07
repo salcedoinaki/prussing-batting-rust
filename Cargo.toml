@@ -3,3 +3,6 @@ name = "lambert_ult"
 version = "0.1.0"
 edition = "2024"
 description = "Unified Lambert Tool — multi-revolution Keplerian and perturbed Lambert solver"
+
+[dependencies]
+nalgebra = "0.33"
