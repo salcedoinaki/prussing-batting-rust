@@ -73,3 +73,23 @@ pub struct TransferGeometry {
     /// Minimum-energy semi-major axis a_m = s / 2
     pub a_min: f64,
 }
+
+/// Configuration for feasibility filtering.
+#[derive(Debug, Clone)]
+pub struct FeasibilityConfig {
+    pub check_earth_collision: bool,
+    pub earth_radius: f64,
+    pub max_delta_v: Option<f64>,
+    pub check_escape_velocity: bool,
+}
+
+impl Default for FeasibilityConfig {
+    fn default() -> Self {
+        Self {
+            check_earth_collision: true,
+            earth_radius: 6378.137, // km
+            max_delta_v: None,
+            check_escape_velocity: false,
+        }
+    }
+}
