@@ -76,3 +76,30 @@ fn kepler_propagate(r0: &Vector3<f64>, v0: &Vector3<f64>, dt: f64, mu: f64) -> V
 // -------------------------------------------------------------------------
 // Integration tests
 // -------------------------------------------------------------------------
+
+/// Verify that the N=0 prograde solution for a 90-degree coplanar transfer is
+/// self-consistent: propagating (r1, v1) for tof under two-body dynamics
+/// should arrive at r2.
+#[test]
+fn test_roundtrip_n0_90deg() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).expect("solver should succeed");
+    assert!(!sols.is_empty());
+
+    let r2_prop = kepler_propagate(&r1, &sols[0].v1, tof, mu);
+    assert_relative_eq!(r2_prop.x, r2.x, epsilon = 1e-3);
+    assert_relative_eq!(r2_prop.y, r2.y, epsilon = 1e-3);
+    assert_relative_eq!(r2_prop.z, r2.z, epsilon = 1e-3);
+}
