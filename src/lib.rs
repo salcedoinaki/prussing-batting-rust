@@ -1,3 +1,28 @@
+//! # Unified Lambert Tool (ULT)
+//!
+//! Multi-revolution Keplerian Lambert solver based on the Prussing/Ochoa
+//! algorithm, with hooks for future MCPI-based perturbed solvers.
+//!
+//! ## Quick start
+//!
+//! ```rust
+//! use nalgebra::Vector3;
+//! use lambert_ult::{solve_lambert, types::{LambertInput, Direction}};
+//!
+//! let input = LambertInput {
+//!     r1: Vector3::new(7000.0, 0.0, 0.0),
+//!     r2: Vector3::new(0.0, 7000.0, 0.0),
+//!     tof: 2000.0,
+//!     mu: 398600.4418,
+//!     direction: Direction::Prograde,
+//!     max_revs: None,
+//! };
+//! let solutions = solve_lambert(&input).unwrap();
+//! for sol in &solutions {
+//!     println!("v1 = {}, v2 = {}, a = {:.1} km", sol.v1, sol.v2, sol.a);
+//! }
+//! ```
+
 pub mod constants;
 pub mod error;
 pub mod keplerian;
