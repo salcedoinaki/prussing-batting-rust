@@ -64,6 +64,31 @@ pub fn auxiliary_angles_principal(a: f64, s: f64, c: f64) -> (f64, f64) {
     (alpha_0, beta_0)
 }
 
+/// Compute the correct (alpha, beta) pair for a given semi-major axis,
+/// revolution count, transfer angle, and whether we are on the upper or lower
+/// time branch.
+///
+/// - `theta`: transfer angle (0, 2*pi)
+/// - `upper`: true if the desired time exceeds the minimum-energy time for
+///   this N (upper branch / long-period solution).
+pub fn auxiliary_angles(
+    a: f64,
+    s: f64,
+    c: f64,
+    theta: f64,
+    upper: bool,
+) -> (f64, f64) {
+    let (alpha_0, beta_0) = auxiliary_angles_principal(a, s, c);
+
+    // beta sign: short-way (theta <= pi) -> +beta_0, long-way -> -beta_0
+    let beta = if theta <= PI { beta_0 } else { -beta_0 };
+
+    // alpha branch: lower time branch -> alpha_0, upper -> 2*pi - alpha_0
+    let alpha = if upper { 2.0 * PI - alpha_0 } else { alpha_0 };
+
+    (alpha, beta)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
