@@ -48,6 +48,22 @@ pub fn compute_transfer_geometry(
     }
 }
 
+/// Compute the principal auxiliary angles alpha_0 and beta_0 for a given
+/// semi-major axis `a`.
+///
+/// Returns `(alpha_0, beta_0)` both in `[0, pi]`.
+pub fn auxiliary_angles_principal(a: f64, s: f64, c: f64) -> (f64, f64) {
+    // sin(alpha/2) = sqrt(s / (2a))
+    let sin_alpha_half = (s / (2.0 * a)).sqrt().clamp(-1.0, 1.0);
+    let alpha_0 = 2.0 * sin_alpha_half.asin();
+
+    // sin(beta/2) = sqrt((s - c) / (2a))
+    let sin_beta_half = ((s - c) / (2.0 * a)).sqrt().clamp(-1.0, 1.0);
+    let beta_0 = 2.0 * sin_beta_half.asin();
+
+    (alpha_0, beta_0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
