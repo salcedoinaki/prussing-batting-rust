@@ -103,3 +103,57 @@ fn test_roundtrip_n0_90deg() {
     assert_relative_eq!(r2_prop.y, r2.y, epsilon = 1e-3);
     assert_relative_eq!(r2_prop.z, r2.z, epsilon = 1e-3);
 }
+
+/// Test a non-coplanar transfer (3-D positions).
+#[test]
+fn test_roundtrip_3d() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(5000.0, 10000.0, 2100.0);
+    let r2 = Vector3::new(-14600.0, 2500.0, 7000.0);
+    let tof = 3600.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).expect("solver should succeed");
+    assert!(!sols.is_empty());
+
+    let r2_prop = kepler_propagate(&r1, &sols[0].v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 1.0,
+        "position error = {err:.4} km (should be < 1 km)"
+    );
+}
+
+/// Energy consistency: the returned semi-major axis should match vis-viva.
+#[test]
+fn test_vis_viva_consistency() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let sol = &sols[0];
+
+    // vis-viva: v^2 = mu * (2/r - 1/a) => a = 1 / (2/r - v^2/mu)
+    let r1_mag = r1.norm();
+    let v1_sq = sol.v1.norm_squared();
+    let a_vv = 1.0 / (2.0 / r1_mag - v1_sq / mu);
+
+    assert_relative_eq!(sol.a, a_vv, epsilon = 1.0);
+}
