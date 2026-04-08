@@ -180,10 +180,12 @@ pub fn coefficients_from_nodes_3d(values: &[[f64; 3]], n: usize) -> Vec<[f64; 3]
 /// Chebyshev domain), with the constant of integration chosen so that
 /// `F(-1) = 0`.
 ///
-/// The analytic relation is (for k >= 1):
-///   d_k = (1 / (2k)) * (c_{k-1} - c_{k+1})
+/// The analytic relations are:
+///   d_1 = c_0 - c_2 / 2
+///   d_k = (c_{k-1} - c_{k+1}) / (2k)   for k >= 2
 /// with the convention that c_{M+1} = 0.
 ///
+/// The k=1 case differs because ∫T_0 dτ = T_1 (not T_1/2).
 /// d_0 is chosen to enforce `F(-1) = 0`.
 pub fn integrate_chebyshev_coeffs(coeffs: &[f64]) -> Vec<f64> {
     let m = coeffs.len(); // M+1 terms  (indices 0..M)
@@ -191,10 +193,16 @@ pub fn integrate_chebyshev_coeffs(coeffs: &[f64]) -> Vec<f64> {
         return vec![];
     }
 
-    // The integrated series has M+1 terms as well (truncated to same degree).
-    // d_k for k = 1..M
     let mut d = vec![0.0; m];
-    for k in 1..m {
+
+    // k=1: d_1 = c_0 - c_2/2  (because ∫T_0 dτ = T_1, full coefficient)
+    if m >= 2 {
+        let c_2 = if m > 2 { coeffs[2] } else { 0.0 };
+        d[1] = coeffs[0] - c_2 / 2.0;
+    }
+
+    // k >= 2: d_k = (c_{k-1} - c_{k+1}) / (2k)
+    for k in 2..m {
         let c_km1 = coeffs[k - 1];
         let c_kp1 = if k + 1 < m { coeffs[k + 1] } else { 0.0 };
         d[k] = (c_km1 - c_kp1) / (2.0 * k as f64);

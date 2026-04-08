@@ -355,13 +355,17 @@ mod tests {
 
         let force = TwoBodyTest { mu };
         let config = McpiConfig {
-            poly_degree: 80,
-            max_iterations: 30,
-            tolerance: 1e-12,
+            poly_degree: 100,
+            max_iterations: 40,
+            tolerance: 1e-10,
         };
 
         let state = mcpi_propagate(&r0, &v0, 0.0, period, &force, &config);
-        assert!(state.converged);
+        assert!(
+            state.converged,
+            "MCPI did not converge in {} iterations",
+            state.iterations_used
+        );
 
         let energy_0 = v0.norm_squared() / 2.0 - mu / r0.norm();
 
