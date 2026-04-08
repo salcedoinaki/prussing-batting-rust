@@ -157,3 +157,38 @@ fn test_vis_viva_consistency() {
 
     assert_relative_eq!(sol.a, a_vv, epsilon = 1.0);
 }
+
+/// Verify that retrograde direction produces a different solution from prograde.
+#[test]
+fn test_prograde_vs_retrograde() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 3600.0;
+
+    let pro = solve_lambert(&LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    })
+    .unwrap();
+
+    let retro = solve_lambert(&LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Retrograde,
+        max_revs: Some(0),
+    })
+    .unwrap();
+
+    // They should both solve, but give different velocities
+    assert!(!pro.is_empty());
+    assert!(!retro.is_empty());
+    let diff = (pro[0].v1 - retro[0].v1).norm();
+    assert!(diff > 0.1, "prograde and retrograde should differ");
+}
