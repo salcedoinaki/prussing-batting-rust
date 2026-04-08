@@ -64,3 +64,32 @@ fn check_periapsis(sol: &LambertSolution, mu: f64, min_radius: f64) -> bool {
     let _ = (mu, min_radius, sol);
     true // TODO: full periapsis check
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Branch;
+    use nalgebra::Vector3;
+
+    #[test]
+    fn test_escape_velocity_filter() {
+        let mu = 398600.4418;
+        let r1 = Vector3::new(7000.0, 0.0, 0.0);
+        let r2 = Vector3::new(0.0, 7000.0, 0.0);
+        let mut sols = vec![LambertSolution {
+            v1: Vector3::new(100.0, 0.0, 0.0), // absurdly fast
+            v2: Vector3::new(0.0, 100.0, 0.0),
+            a: 10000.0,
+            n_revs: 0,
+            branch: Branch::Fractional,
+            transfer_angle: std::f64::consts::PI / 2.0,
+            is_feasible: true,
+        }];
+        let cfg = FeasibilityConfig {
+            check_escape_velocity: true,
+            ..Default::default()
+        };
+        filter_feasibility(&mut sols, &r1, &r2, mu, &cfg);
+        assert!(!sols[0].is_feasible);
+    }
+}
