@@ -165,3 +165,54 @@ fn solve_branch(
 
     Ok(None) // did not converge
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Direction;
+    use approx::assert_relative_eq;
+    use nalgebra::Vector3;
+
+    /// Basic smoke test: a 90-degree coplanar LEO transfer should produce
+    /// exactly one N=0 solution with reasonable velocity magnitudes.
+    #[test]
+    fn test_solve_n0_coplanar() {
+        let input = LambertInput {
+            r1: Vector3::new(7000.0, 0.0, 0.0),
+            r2: Vector3::new(0.0, 7000.0, 0.0),
+            tof: 2000.0,
+            mu: 398600.4418,
+            direction: Direction::Prograde,
+            max_revs: Some(0),
+        };
+        let sols = solve_prussing(&input).expect("should find a solution");
+        assert!(!sols.is_empty(), "should have at least one solution");
+        let sol = &sols[0];
+        assert_eq!(sol.n_revs, 0);
+
+        // The velocity magnitudes should be on the order of ~7 km/s for LEO
+        let v1_mag = sol.v1.norm();
+        let v2_mag = sol.v2.norm();
+        assert!(v1_mag > 1.0 && v1_mag < 20.0, "v1 = {v1_mag} out of range");
+        assert!(v2_mag > 1.0 && v2_mag < 20.0, "v2 = {v2_mag} out of range");
+    }
+
+    /// The N=0 transfer angle for a prograde 90-degree geometry should be pi/2.
+    #[test]
+    fn test_transfer_angle() {
+        let input = LambertInput {
+            r1: Vector3::new(7000.0, 0.0, 0.0),
+            r2: Vector3::new(0.0, 7000.0, 0.0),
+            tof: 2000.0,
+            mu: 398600.4418,
+            direction: Direction::Prograde,
+            max_revs: Some(0),
+        };
+        let sols = solve_prussing(&input).unwrap();
+        assert_relative_eq!(
+            sols[0].transfer_angle,
+            std::f64::consts::PI / 2.0,
+            epsilon = 1e-8
+        );
+    }
+}
