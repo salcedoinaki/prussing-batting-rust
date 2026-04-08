@@ -89,6 +89,21 @@ pub fn auxiliary_angles(
     (alpha, beta)
 }
 
+/// Minimum-energy transfer time for `n_revs` complete revolutions.
+///
+/// At the minimum-energy semi-major axis `a_m = s/2` the auxiliary angle
+/// `alpha_m = pi`.
+pub fn time_min_energy(s: f64, c: f64, theta: f64, n_revs: u32, mu: f64) -> f64 {
+    let sin_beta_m_half = ((s - c) / s).sqrt().clamp(-1.0, 1.0);
+    let beta_m0 = 2.0 * sin_beta_m_half.asin();
+    let beta_m = if theta <= PI { beta_m0 } else { -beta_m0 };
+
+    let alpha_m = PI; // at minimum energy
+
+    let k = (2 * n_revs) as f64 * PI + alpha_m - beta_m + beta_m.sin();
+    (s / 2.0).powf(1.5) * k / mu.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
