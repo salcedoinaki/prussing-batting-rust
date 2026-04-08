@@ -104,6 +104,12 @@ pub fn time_min_energy(s: f64, c: f64, theta: f64, n_revs: u32, mu: f64) -> f64 
     (s / 2.0).powf(1.5) * k / mu.sqrt()
 }
 
+/// Parabolic transfer time — lower bound for elliptic solutions (N = 0).
+pub fn time_parabolic(s: f64, c: f64, theta: f64, mu: f64) -> f64 {
+    let sgn = if theta <= PI { 1.0 } else { -1.0 };
+    (2.0_f64).sqrt() / 3.0 * (s.powf(1.5) - sgn * (s - c).powf(1.5)) / mu.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +124,13 @@ mod tests {
         assert_relative_eq!(geom.r1_mag, 7000.0, epsilon = 1e-10);
         assert_relative_eq!(geom.r2_mag, 7000.0, epsilon = 1e-10);
         assert_relative_eq!(geom.theta, PI / 2.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_parabolic_time_positive() {
+        let s = 14000.0;
+        let c = 9899.0; // rough chord for 90-deg transfer at r=7000
+        let tp = time_parabolic(s, c, PI / 2.0, 398600.4418);
+        assert!(tp > 0.0);
     }
 }
