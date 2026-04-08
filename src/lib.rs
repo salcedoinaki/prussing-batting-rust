@@ -25,7 +25,9 @@
 
 pub mod constants;
 pub mod error;
+pub mod force_models;
 pub mod keplerian;
+pub mod perturbed;
 pub mod types;
 
 use error::LambertError;
