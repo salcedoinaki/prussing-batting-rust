@@ -192,3 +192,144 @@ fn test_prograde_vs_retrograde() {
     let diff = (pro[0].v1 - retro[0].v1).norm();
     assert!(diff > 0.1, "prograde and retrograde should differ");
 }
+
+// =========================================================================
+// MCPI propagation tests (Sprint 2 validation)
+// =========================================================================
+
+use lambert_ult::force_models::two_body::TwoBody;
+use lambert_ult::perturbed::mcpi::{evaluate_at, mcpi_propagate, McpiConfig};
+
+/// MCPI-IVP validation: propagate a circular orbit and compare the terminal
+/// position against the analytical Kepler propagator.
+#[test]
+fn test_mcpi_vs_kepler_circular() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 7000.0;
+    let v_circ = (mu / r_orbit).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+    let tof = period * 0.75; // 3/4 period
+
+    let r0 = Vector3::new(r_orbit, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, v_circ, 0.0);
+
+    // Analytical (Kepler propagator) reference
+    let r_kepler = kepler_propagate(&r0, &v0, tof, mu);
+
+    // MCPI propagation
+    let force = TwoBody::new(mu);
+    let config = McpiConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged, "MCPI did not converge");
+
+    // Final position (tau=1 => CGL node j=0)
+    let rf_mcpi = &state.positions[0];
+    let err = (rf_mcpi - r_kepler).norm();
+    assert!(
+        err < 1e-3,
+        "MCPI vs Kepler position error = {err:.6e} km (circular, 3/4 period)"
+    );
+}
+
+/// MCPI-IVP validation: propagate an eccentric orbit (e=0.5) and compare
+/// the terminal position against the analytical Kepler propagator.
+#[test]
+fn test_mcpi_vs_kepler_eccentric() {
+    let mu: f64 = 398600.4418;
+    let a: f64 = 12000.0;
+    let e: f64 = 0.5;
+    let rp = a * (1.0 - e);
+    let vp = (mu * (1.0 + e) / (a * (1.0 - e))).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (a.powi(3) / mu).sqrt();
+    let tof = period * 0.6;
+
+    let r0 = Vector3::new(rp, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, vp, 0.0);
+
+    let r_kepler = kepler_propagate(&r0, &v0, tof, mu);
+
+    let force = TwoBody::new(mu);
+    let config = McpiConfig {
+        poly_degree: 100,
+        max_iterations: 40,
+        tolerance: 1e-10,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged, "MCPI did not converge for e=0.5 orbit");
+
+    let rf_mcpi = &state.positions[0];
+    let err = (rf_mcpi - r_kepler).norm();
+    assert!(
+        err < 1e-2,
+        "MCPI vs Kepler position error = {err:.6e} km (e=0.5)"
+    );
+}
+
+/// MCPI-IVP validation: propagate an inclined 3-D orbit and compare against
+/// the Kepler propagator. This tests that the MCPI engine handles non-planar
+/// orbits correctly.
+#[test]
+fn test_mcpi_vs_kepler_3d() {
+    let mu: f64 = 398600.4418;
+    let r0 = Vector3::new(5000.0, 10000.0, 2100.0);
+    // Give it a velocity that produces a bound orbit
+    let v0 = Vector3::new(-2.0, 4.0, 1.5);
+    let tof: f64 = 3600.0;
+
+    let r_kepler = kepler_propagate(&r0, &v0, tof, mu);
+
+    let force = TwoBody::new(mu);
+    let config = McpiConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged, "MCPI did not converge for 3-D orbit");
+
+    let rf_mcpi = &state.positions[0];
+    let err = (rf_mcpi - r_kepler).norm();
+    assert!(
+        err < 1e-2,
+        "MCPI vs Kepler position error = {err:.6e} km (3-D orbit)"
+    );
+}
+
+/// Verify that evaluate_at produces positions consistent with the Kepler
+/// propagator at multiple intermediate times along the arc.
+#[test]
+fn test_mcpi_evaluate_at_intermediate_vs_kepler() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 7000.0;
+    let v_circ = (mu / r_orbit).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+    let tof = period / 2.0;
+
+    let r0 = Vector3::new(r_orbit, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, v_circ, 0.0);
+
+    let force = TwoBody::new(mu);
+    let config = McpiConfig {
+        poly_degree: 60,
+        max_iterations: 25,
+        tolerance: 1e-10,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged);
+
+    // Check at 10 equally spaced intermediate times
+    for i in 1..10 {
+        let t = tof * (i as f64) / 10.0;
+        let (r_mcpi, _v_mcpi) = evaluate_at(&state, t, 0.0, tof);
+        let r_kepler = kepler_propagate(&r0, &v0, t, mu);
+        let err = (r_mcpi - r_kepler).norm();
+        assert!(
+            err < 1e-2,
+            "MCPI vs Kepler at t={t:.1}: error = {err:.6e} km"
+        );
+    }
+}
