@@ -26,10 +26,48 @@ pub fn solve_prussing(input: &LambertInput) -> Result<Vec<LambertSolution>, Lamb
         ));
     }
 
-    let _geom = compute_transfer_geometry(&input.r1, &input.r2, input.direction);
+    let geom = compute_transfer_geometry(&input.r1, &input.r2, input.direction);
+    let mu = input.mu;
+    let tof = input.tof;
 
-    // TODO: implement solver
-    Err(LambertError::NoSolution)
+    // Parabolic lower bound for N=0
+    let t_p = time_parabolic(geom.s, geom.c, geom.theta, mu);
+    if tof < t_p {
+        return Err(LambertError::NoSolution);
+    }
+
+    // Minimum-energy time for N=0
+    let t_m0 = time_min_energy(geom.s, geom.c, geom.theta, 0, mu);
+
+    // --- determine N_max ---
+    let n_max = determine_n_max(&geom, tof, mu, input.max_revs);
+
+    let mut solutions: Vec<LambertSolution> = Vec::with_capacity(2 * n_max as usize + 1);
+
+    // --- N = 0 (fractional orbit) ---
+    // For N=0 there is exactly one solution. The branch depends on tof vs t_m.
+    let upper_n0 = tof > t_m0;
+    if let Some(sol) = solve_branch(input, &geom, 0, upper_n0)? {
+        solutions.push(sol);
+    }
+
+    // --- N >= 1: upper and lower branches ---
+    for n in 1..=n_max {
+        // lower branch (faster, alpha = alpha_0)
+        if let Some(sol) = solve_branch(input, &geom, n, false)? {
+            solutions.push(sol);
+        }
+        // upper branch (slower, alpha = 2*pi - alpha_0)
+        if let Some(sol) = solve_branch(input, &geom, n, true)? {
+            solutions.push(sol);
+        }
+    }
+
+    if solutions.is_empty() {
+        return Err(LambertError::NoSolution);
+    }
+
+    Ok(solutions)
 }
 
 /// Find the maximum revolution count whose minimum-energy transfer time does
