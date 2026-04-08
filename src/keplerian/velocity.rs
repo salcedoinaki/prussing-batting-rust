@@ -38,3 +38,28 @@ pub fn terminal_velocities(
 
     (v1, v2)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Vector3;
+
+    #[test]
+    fn test_terminal_velocities_nonzero() {
+        let r1 = Vector3::new(7000.0, 0.0, 0.0);
+        let r2 = Vector3::new(0.0, 7000.0, 0.0);
+        let geom = crate::keplerian::geometry::compute_transfer_geometry(
+            &r1,
+            &r2,
+            crate::types::Direction::Prograde,
+        );
+        // Use minimum-energy a as a rough test
+        let a = geom.a_min * 1.1;
+        let (alpha, beta) = crate::keplerian::geometry::auxiliary_angles(
+            a, geom.s, geom.c, geom.theta, false,
+        );
+        let (v1, v2) = terminal_velocities(&r1, &r2, &geom, a, alpha, beta, 398600.4418);
+        assert!(v1.norm() > 0.0);
+        assert!(v2.norm() > 0.0);
+    }
+}
