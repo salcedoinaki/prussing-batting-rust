@@ -110,6 +110,19 @@ pub fn time_parabolic(s: f64, c: f64, theta: f64, mu: f64) -> f64 {
     (2.0_f64).sqrt() / 3.0 * (s.powf(1.5) - sgn * (s - c).powf(1.5)) / mu.sqrt()
 }
 
+/// Time of flight for a given semi-major axis, revolution count, and
+/// auxiliary-angle branch.
+///
+/// ```text
+/// sqrt(mu) * t = a^{3/2} * (2*N*pi + alpha - beta - (sin(alpha) - sin(beta)))
+/// ```
+pub fn tof_from_a(a: f64, alpha: f64, beta: f64, n_revs: u32, mu: f64) -> f64 {
+    let n = n_revs as f64;
+    let xi = alpha - beta;
+    let eta = alpha.sin() - beta.sin();
+    a.powf(1.5) * (2.0 * n * PI + xi - eta) / mu.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
