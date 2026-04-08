@@ -6,3 +6,6 @@ description = "Unified Lambert Tool — multi-revolution Keplerian and perturbed
 
 [dependencies]
 nalgebra = "0.33"
+
+[dev-dependencies]
+approx = "0.5"

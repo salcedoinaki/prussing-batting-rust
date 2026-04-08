@@ -47,3 +47,20 @@ pub fn compute_transfer_geometry(
         a_min,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn test_geometry_coplanar() {
+        let r1 = Vector3::new(7000.0, 0.0, 0.0);
+        let r2 = Vector3::new(0.0, 7000.0, 0.0);
+        let geom = compute_transfer_geometry(&r1, &r2, Direction::Prograde);
+
+        assert_relative_eq!(geom.r1_mag, 7000.0, epsilon = 1e-10);
+        assert_relative_eq!(geom.r2_mag, 7000.0, epsilon = 1e-10);
+        assert_relative_eq!(geom.theta, PI / 2.0, epsilon = 1e-10);
+    }
+}
