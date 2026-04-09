@@ -4,6 +4,11 @@ use crate::types::{FeasibilityConfig, LambertSolution};
 
 /// Apply feasibility filters to a set of Lambert solutions **in place**,
 /// setting `is_feasible = false` on solutions that fail any check.
+///
+/// The `v1_ref` and `v2_ref` parameters are the velocities on the departure
+/// and arrival orbits, respectively. They are required for the `max_delta_v`
+/// check, which computes `Δv = ‖v1_transfer − v1_ref‖ + ‖v2_ref − v2_transfer‖`.
+/// Pass `None` to skip the delta-v check even if `max_delta_v` is set.
 pub fn filter_feasibility(
     solutions: &mut [LambertSolution],
     r1: &Vector3<f64>,
@@ -11,9 +16,23 @@ pub fn filter_feasibility(
     mu: f64,
     config: &FeasibilityConfig,
 ) {
+    filter_feasibility_with_ref(solutions, r1, r2, mu, config, None, None);
+}
+
+/// Like [`filter_feasibility`], but accepts optional reference orbit
+/// velocities for accurate delta-v computation.
+pub fn filter_feasibility_with_ref(
+    solutions: &mut [LambertSolution],
+    r1: &Vector3<f64>,
+    r2: &Vector3<f64>,
+    mu: f64,
+    config: &FeasibilityConfig,
+    v1_ref: Option<&Vector3<f64>>,
+    v2_ref: Option<&Vector3<f64>>,
+) {
     for sol in solutions.iter_mut() {
         if config.check_earth_collision {
-            if !check_periapsis(sol, mu, config.earth_radius) {
+            if !check_periapsis(r1, &sol.v1, sol.a, mu, config.earth_radius) {
                 sol.is_feasible = false;
                 continue;
             }
@@ -29,11 +48,13 @@ pub fn filter_feasibility(
             }
         }
         if let Some(max_dv) = config.max_delta_v {
-            // delta-v is typically measured relative to reference orbits; here
-            // we use the velocity magnitudes themselves as a rough proxy.
-            let dv = sol.v1.norm() + sol.v2.norm();
-            if dv > max_dv {
-                sol.is_feasible = false;
+            // Delta-v requires reference orbit velocities at departure and
+            // arrival. Without them we cannot compute a meaningful delta-v.
+            if let (Some(v1r), Some(v2r)) = (v1_ref, v2_ref) {
+                let dv = (sol.v1 - v1r).norm() + (v2r - sol.v2).norm();
+                if dv > max_dv {
+                    sol.is_feasible = false;
+                }
             }
         }
     }
@@ -41,28 +62,30 @@ pub fn filter_feasibility(
 
 /// Check that the periapsis of the transfer orbit does not dip below
 /// `min_radius` (e.g., Earth's surface).
-fn check_periapsis(sol: &LambertSolution, mu: f64, min_radius: f64) -> bool {
-    if sol.a <= 0.0 {
+///
+/// Uses the angular-momentum / semi-latus-rectum approach:
+///   h = |r1 × v1|,  p = h²/μ,  e = sqrt(max(0, 1 - p/a)),  r_p = a(1 - e)
+fn check_periapsis(
+    r1: &Vector3<f64>,
+    v1: &Vector3<f64>,
+    a: f64,
+    mu: f64,
+    min_radius: f64,
+) -> bool {
+    if a <= 0.0 {
         // Hyperbolic — periapsis check still possible but we only handle
         // elliptic here; allow it through.
         return true;
     }
-    // Compute eccentricity from vis-viva and angular-momentum magnitude.
-    // We approximate using the energy + semi-major axis approach:
-    //   r_p = a * (1 - e)
-    //   e = 1 - r_p / a
-    // From the specific angular momentum h = |r1 x v1|:
-    //   p = h^2 / mu  (semi-latus rectum)
-    //   e = sqrt(1 - p/a)
-    // This avoids needing r1 at this call site.
-    // For now, a simple energy-based bound: the minimum possible periapsis
-    // for a given a is 0 (e = 1), and for a circular orbit it is a.
-    // We use the semi-latus rectum route via the transfer-angle relation.
-    //
-    // A robust implementation would propagate or use the eccentricity
-    // directly.  For the boilerplate we pass through.
-    let _ = (mu, min_radius, sol);
-    true // TODO: full periapsis check
+
+    let h = r1.cross(v1);
+    let h_sq = h.norm_squared();
+    let p = h_sq / mu; // semi-latus rectum
+    let e_sq = (1.0 - p / a).max(0.0);
+    let e = e_sq.sqrt();
+    let r_periapsis = a * (1.0 - e);
+
+    r_periapsis >= min_radius
 }
 
 #[cfg(test)]

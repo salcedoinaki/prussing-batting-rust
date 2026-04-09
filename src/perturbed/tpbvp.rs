@@ -242,23 +242,7 @@ pub fn solve_tpbvp(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-/// Evaluate a 3-component Chebyshev series at a node, using precomputed
-/// T_k(τ_j) values.
-fn eval_3d_at_node(coeffs: &[[f64; 3]], t_k_at_node: &[f64]) -> [f64; 3] {
-    let m = coeffs.len().min(t_k_at_node.len());
-    let mut result = [0.0; 3];
-    for k in 0..m {
-        let tk = t_k_at_node[k];
-        result[0] += coeffs[k][0] * tk;
-        result[1] += coeffs[k][1] * tk;
-        result[2] += coeffs[k][2] * tk;
-    }
-    result
-}
+use crate::perturbed::chebyshev::eval_3d_at_node;
 
 // =========================================================================
 // Tests

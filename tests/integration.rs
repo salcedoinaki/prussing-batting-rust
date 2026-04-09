@@ -353,21 +353,23 @@ fn rk4_propagate(
     let h = dt / n_steps as f64;
     let mut r = *r0;
     let mut v = *v0;
+    let mut t = 0.0;
 
     for _ in 0..n_steps {
-        let a1 = force.acceleration(0.0, &r, &v);
+        let a1 = force.acceleration(t, &r, &v);
         let r2 = r + 0.5 * h * v;
         let v2 = v + 0.5 * h * a1;
-        let a2 = force.acceleration(0.0, &r2, &v2);
+        let a2 = force.acceleration(t + 0.5 * h, &r2, &v2);
         let r3 = r + 0.5 * h * v2;
         let v3 = v + 0.5 * h * a2;
-        let a3 = force.acceleration(0.0, &r3, &v3);
+        let a3 = force.acceleration(t + 0.5 * h, &r3, &v3);
         let r4 = r + h * v3;
         let v4 = v + h * a3;
-        let a4 = force.acceleration(0.0, &r4, &v4);
+        let a4 = force.acceleration(t + h, &r4, &v4);
 
         r += h / 6.0 * (v + 2.0 * v2 + 2.0 * v3 + v4);
         v += h / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4);
+        t += h;
     }
 
     (r, v)

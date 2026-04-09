@@ -1,6 +1,7 @@
 use crate::error::LambertError;
 use crate::keplerian::geometry::{
-    auxiliary_angles, compute_transfer_geometry, time_min_energy, time_parabolic, tof_from_a,
+    auxiliary_angles, compute_transfer_geometry, find_a_tmin, time_min_energy, time_min_transfer,
+    time_parabolic, tof_from_a,
 };
 use crate::keplerian::velocity::terminal_velocities;
 use crate::types::{Branch, LambertInput, LambertSolution, TransferGeometry};
@@ -33,7 +34,9 @@ pub fn solve_prussing(input: &LambertInput) -> Result<Vec<LambertSolution>, Lamb
     // Parabolic lower bound for N=0
     let t_p = time_parabolic(geom.s, geom.c, geom.theta, mu);
     if tof < t_p {
-        return Err(LambertError::NoSolution);
+        return Err(LambertError::InvalidInput(
+            "time of flight is below parabolic minimum — hyperbolic transfers not supported".into(),
+        ));
     }
 
     // Minimum-energy time for N=0

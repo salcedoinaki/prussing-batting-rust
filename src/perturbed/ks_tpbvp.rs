@@ -578,25 +578,7 @@ fn compute_mu(r: &Vector3<f64>, v: &Vector3<f64>) -> f64 {
     crate::constants::MU_EARTH
 }
 
-// =========================================================================
-// 4D Chebyshev helper
-// =========================================================================
-
-fn eval_3d_at_node(coeffs: &[[f64; 3]], t_k_at_node: &[f64]) -> [f64; 3] {
-    let m = coeffs.len().min(t_k_at_node.len());
-    let mut result = [0.0; 3];
-    for k in 0..m {
-        let tk = t_k_at_node[k];
-        result[0] += coeffs[k][0] * tk;
-        result[1] += coeffs[k][1] * tk;
-        result[2] += coeffs[k][2] * tk;
-    }
-    result
-}
-
-/// Extend evaluation for Chebyshev series with 4 components, using
-/// 3D evaluation for the first three and a separate scalar for the 4th.
-/// (Avoiding re-exporting 4D arrays keeps compatibility with existing 3D tooling.)
+use crate::perturbed::chebyshev::eval_3d_at_node;
 
 // =========================================================================
 // Tests

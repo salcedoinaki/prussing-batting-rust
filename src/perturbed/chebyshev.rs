@@ -238,6 +238,24 @@ pub fn integrate_chebyshev_coeffs_3d(coeffs: &[[f64; 3]]) -> Vec<[f64; 3]> {
 }
 
 // ---------------------------------------------------------------------------
+// Nodal evaluation helper
+// ---------------------------------------------------------------------------
+
+/// Evaluate a 3-component Chebyshev series at a single node, using
+/// precomputed `T_k(τ_j)` values.
+pub fn eval_3d_at_node(coeffs: &[[f64; 3]], t_k_at_node: &[f64]) -> [f64; 3] {
+    let m = coeffs.len().min(t_k_at_node.len());
+    let mut result = [0.0; 3];
+    for k in 0..m {
+        let tk = t_k_at_node[k];
+        result[0] += coeffs[k][0] * tk;
+        result[1] += coeffs[k][1] * tk;
+        result[2] += coeffs[k][2] * tk;
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Pre-computed operator matrices (for repeated MCPI calls with same N)
 // ---------------------------------------------------------------------------
 
@@ -265,9 +283,33 @@ impl ChebyshevOperators {
     }
 
     /// Compute Chebyshev coefficients from nodal values using the cached
-    /// T-matrix.
+    /// T-matrix (avoids recomputing T_k(τ_j) from scratch).
     pub fn coefficients(&self, values: &[f64]) -> Vec<f64> {
-        coefficients_from_nodes(values, self.n)
+        assert!(
+            values.len() == self.n + 1,
+            "expected {} values at CGL nodes, got {}",
+            self.n + 1,
+            values.len()
+        );
+
+        let n = self.n;
+        let nf = n as f64;
+        let mut coeffs = Vec::with_capacity(n + 1);
+
+        for k in 0..=n {
+            let mut sum = 0.0;
+            for j in 0..=n {
+                let t_kj = self.t_matrix[j][k];
+                let weight = if j == 0 || j == n { 0.5 } else { 1.0 };
+                sum += weight * values[j] * t_kj;
+            }
+            let mut c_k = 2.0 / nf * sum;
+            if k == 0 || k == n {
+                c_k *= 0.5;
+            }
+            coeffs.push(c_k);
+        }
+        coeffs
     }
 }
 

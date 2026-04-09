@@ -163,6 +163,12 @@ pub fn solve_mps_ivp(
         // Guard against zero velocity (shouldn't happen for physical orbits)
         let delta = if delta < 1e-15 { 1e-10 } else { delta };
 
+        // Axis-aligned perturbation directions. This is simpler than
+        // constructing an orthonormal basis from v_ref and works well for
+        // typical orbital mechanics problems where v_ref is never closely
+        // aligned with a coordinate axis. If the resulting 3×3 matrix
+        // becomes singular (rank-deficient), the LU solve below will
+        // detect and handle it.
         let dv = [
             Vector3::new(delta, 0.0, 0.0),
             Vector3::new(0.0, delta, 0.0),
