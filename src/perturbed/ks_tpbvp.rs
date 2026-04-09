@@ -35,20 +35,21 @@ pub fn cartesian_to_ks(r: &Vector3<f64>) -> KsVec4 {
         return [0.0; 4];
     }
 
-    if r.x >= 0.0 {
-        // Standard branch: u4 = 0
-        let u1 = ((r_mag + r.x) / 2.0).sqrt();
+    let sum = r_mag + r.x;
+    if sum > 1e-10 * r_mag {
+        // Primary branch: u4 = 0 (works for all r not exactly along −x)
+        let u1 = (sum / 2.0).sqrt();
         let denom = 2.0 * u1;
         let u2 = r.y / denom;
         let u3 = r.z / denom;
         [u1, u2, u3, 0.0]
     } else {
-        // Alternate branch when r.x < 0: u3 = 0
+        // Fallback branch: u3 = 0 (for r nearly along −x axis)
         let u2 = ((r_mag - r.x) / 2.0).sqrt();
         let denom = 2.0 * u2;
         let u1 = r.y / denom;
-        let u4 = -r.z / denom;
-        [u1, u2, 0.0, u4] // u3 = 0
+        let u4 = r.z / denom;
+        [u1, u2, 0.0, u4]
     }
 }
 
@@ -102,15 +103,14 @@ pub fn ks_vel_to_cartesian(u: &KsVec4, u_prime: &KsVec4) -> Vector3<f64> {
 
 /// Compute the KS second derivative u'' from the regularized EOM.
 ///
-/// The regularized EOM in fictitious time s is:
-///   u'' = (h/2) u + (r/2) P(u)
+/// The regularized EOM in fictitious time s is (Stiefel & Scheifele):
+///   u'' = (h/2) u + (r/2) L(u)ᵀ f_perturb
 /// where:
-///   h = −μ/(2a) = v²/2 − μ/r  (total orbital energy, conserved for two-body)
-///   P(u) = ½ L(u)ᵀ · a_perturb  (perturbing acceleration in KS coords)
+///   h = v²/2 − μ/r  (specific orbital energy)
+///   f_perturb = a_full − a_twobody (perturbing acceleration in 3D)
 ///   r = ||u||²
 ///
-/// For the TPBVP we evolve the full EOM including the energy equation:
-///   h' = 2 u' · P(u) / r    (energy rate for perturbed motion)
+/// Energy rate: dh/ds = 2 u'ᵀ · L(u)ᵀ f_perturb
 fn ks_accel(
     u: &KsVec4,
     u_prime: &KsVec4,
@@ -119,26 +119,27 @@ fn ks_accel(
     force_model: &dyn ForceModel,
     t: f64,
 ) -> (KsVec4, f64) {
-    let r = ks_norm_sq(u);
+    let r = ks_norm_sq(u); // = ||r_vec|| (position magnitude)
     let r_vec = ks_to_cartesian(u);
     let v_vec = ks_vel_to_cartesian(u, u_prime);
 
-    // Full acceleration
+    // Full 3D acceleration from force model
     let a_full = force_model.acceleration(t, &r_vec, &v_vec);
-    // Two-body acceleration
-    let a_twobody = -mu / (r * r.sqrt()) * &r_vec;
-    // Perturbing acceleration
+    // Two-body acceleration: -mu/r³ * r_vec (r = ||r_vec||, r³ = r*r*r)
+    let r_cubed = r * r * r;
+    let a_twobody = -(mu / r_cubed) * &r_vec;
+    // Perturbing acceleration (zero for pure two-body)
     let a_perturb = a_full - a_twobody;
 
-    // P(u) = ½ L(u)ᵀ · a_perturb
+    // P = L(u)ᵀ · f_perturb  (4D KS perturbation, NO extra factor of ½)
     let p = [
-        0.5 * (u[0] * a_perturb.x + u[1] * a_perturb.y + u[2] * a_perturb.z),
-        0.5 * (-u[1] * a_perturb.x + u[0] * a_perturb.y + u[3] * a_perturb.z),
-        0.5 * (-u[2] * a_perturb.x - u[3] * a_perturb.y + u[0] * a_perturb.z),
-        0.5 * (u[3] * a_perturb.x - u[2] * a_perturb.y + u[1] * a_perturb.z),
+        u[0] * a_perturb.x + u[1] * a_perturb.y + u[2] * a_perturb.z,
+        -u[1] * a_perturb.x + u[0] * a_perturb.y + u[3] * a_perturb.z,
+        -u[2] * a_perturb.x - u[3] * a_perturb.y + u[0] * a_perturb.z,
+        u[3] * a_perturb.x - u[2] * a_perturb.y + u[1] * a_perturb.z,
     ];
 
-    // u'' = (h/2) u + (r/2) P(u)
+    // u'' = (h/2) u + (r/2) P
     let u_ddot = [
         0.5 * h * u[0] + 0.5 * r * p[0],
         0.5 * h * u[1] + 0.5 * r * p[1],
@@ -146,9 +147,9 @@ fn ks_accel(
         0.5 * h * u[3] + 0.5 * r * p[3],
     ];
 
-    // h' = 2 dot(u', P) (Note: some formulations divide by r, but with
-    // dt = r ds the chain rule cancels: dh/ds = r · dh/dt)
-    let h_dot = 2.0 * (u_prime[0] * p[0] + u_prime[1] * p[1] + u_prime[2] * p[2] + u_prime[3] * p[3]);
+    // dh/ds = 2 u'ᵀ P
+    let h_dot = 2.0 * (u_prime[0] * p[0] + u_prime[1] * p[1]
+        + u_prime[2] * p[2] + u_prime[3] * p[3]);
 
     (u_ddot, h_dot)
 }
@@ -276,7 +277,7 @@ pub fn solve_ks_tpbvp(
     // Step 2: Estimate fictitious time interval [0, Δs]
     // ------------------------------------------------------------------
     let ds_total = estimate_fictitious_time(r1, r2, dt, mu, a_guess);
-    let w = ds_total / 2.0; // half-interval in fictitious time
+    let mut w = ds_total / 2.0; // half-interval in fictitious time (adjustable)
 
     // ------------------------------------------------------------------
     // Step 3: Set up CGL nodes in fictitious time
@@ -332,6 +333,20 @@ pub fn solve_ks_tpbvp(
         for j in 0..=n {
             let int_val: f64 = r_sq_int.iter().enumerate().map(|(k, &d)| d * t_all[j][k]).sum();
             t_phys_nodes.push(t0 + w * int_val);
+        }
+
+        // Step 5a': Adjust Δs (w) to match target TOF.
+        // T_computed = w × ∫_{-1}^{1} ||u||² dτ = w × Σ r_sq_int_k (T_k(1)=1)
+        let r_sq_int_at_1: f64 = r_sq_int.iter().sum();
+        let t_computed = w * r_sq_int_at_1;
+        if t_computed > 1e-20 {
+            w *= dt / t_computed;
+            // Recompute physical times with updated w
+            t_phys_nodes.clear();
+            for j in 0..=n {
+                let int_val: f64 = r_sq_int.iter().enumerate().map(|(k, &d)| d * t_all[j][k]).sum();
+                t_phys_nodes.push(t0 + w * int_val);
+            }
         }
 
         // Step 5b: Evaluate KS accelerations at all CGL nodes
