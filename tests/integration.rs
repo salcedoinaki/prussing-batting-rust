@@ -603,3 +603,146 @@ fn test_tpbvp_j2_retrograde() {
         "retrograde propagation error = {pos_err:.6e} km"
     );
 }
+
+// =========================================================================
+// KS-TPBVP integration tests
+// =========================================================================
+
+/// The KS-TPBVP under J2 for a medium arc (150°) should differ from Keplerian.
+#[test]
+fn test_ks_tpbvp_j2_medium_arc() {
+    use lambert_ult::force_models::gravity::ZonalGravity;
+    use lambert_ult::perturbed::ks_tpbvp::{solve_ks_tpbvp, KsTpbvpConfig};
+
+    let mu: f64 = 398600.4418;
+    let theta = 150.0_f64.to_radians();
+    let r_mag = 7000.0;
+    let r1 = Vector3::new(r_mag, 0.0, 0.0);
+    let r2 = Vector3::new(r_mag * theta.cos(), r_mag * theta.sin(), 2000.0);
+    let tof = 3500.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+    let a_kep = sols[0].a;
+
+    let force = ZonalGravity::earth_j2();
+    let config = KsTpbvpConfig {
+        poly_degree: 100,
+        max_iterations: 60,
+        tolerance: 1e-10,
+    };
+    let result = solve_ks_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, a_kep, &force, &config);
+    assert!(
+        result.converged,
+        "KS-TPBVP J2 medium arc should converge ({} iters)",
+        result.iterations_used
+    );
+
+    let diff = (result.v1 - v1_kep).norm();
+    assert!(
+        diff > 1e-6,
+        "J2-perturbed v1 should differ from Keplerian: {diff:.6e}"
+    );
+}
+
+/// KS-TPBVP under J2 should converge and produce a different velocity
+/// than the Keplerian solution for a 120° out-of-plane transfer.
+#[test]
+fn test_ks_tpbvp_j2_convergence_120deg() {
+    use lambert_ult::force_models::gravity::ZonalGravity;
+    use lambert_ult::perturbed::ks_tpbvp::{solve_ks_tpbvp, KsTpbvpConfig};
+
+    let mu: f64 = 398600.4418;
+    let theta = 120.0_f64.to_radians();
+    let r_mag = 7000.0;
+    let r1 = Vector3::new(r_mag, 0.0, 0.0);
+    let r2 = Vector3::new(r_mag * theta.cos(), r_mag * theta.sin(), 1500.0);
+    let tof = 3000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+    let a_kep = sols[0].a;
+
+    let force = ZonalGravity::earth_j2();
+    let config = KsTpbvpConfig {
+        poly_degree: 100,
+        max_iterations: 60,
+        tolerance: 1e-10,
+    };
+    let result = solve_ks_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, a_kep, &force, &config);
+    assert!(
+        result.converged,
+        "KS-TPBVP J2 120° should converge ({} iters)",
+        result.iterations_used
+    );
+
+    // v1 should differ from Keplerian due to J2
+    let diff = (result.v1 - v1_kep).norm();
+    assert!(
+        diff > 1e-6,
+        "J2-perturbed v1 should differ from Keplerian: {diff:.6e}"
+    );
+}
+
+/// Two-body KS-TPBVP for a near-π transfer: test convergence at the edge
+/// of the medium-arc domain.
+#[test]
+fn test_ks_tpbvp_two_body_near_pi() {
+    use lambert_ult::force_models::two_body::TwoBody;
+    use lambert_ult::perturbed::ks_tpbvp::{solve_ks_tpbvp, KsTpbvpConfig};
+
+    let mu: f64 = 398600.4418;
+    // ~170° transfer
+    let theta = 170.0_f64.to_radians();
+    let r_mag = 7000.0;
+    let r1 = Vector3::new(r_mag, 0.0, 0.0);
+    let r2 = Vector3::new(r_mag * theta.cos(), r_mag * theta.sin(), 0.0);
+    let tof = 4500.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+    let a_kep = sols[0].a;
+
+    let force = TwoBody::new(mu);
+    let config = KsTpbvpConfig {
+        poly_degree: 100,
+        max_iterations: 80,
+        tolerance: 1e-10,
+    };
+    let result = solve_ks_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, a_kep, &force, &config);
+
+    assert!(
+        result.converged,
+        "KS-TPBVP should converge for 170° arc ({} iters)",
+        result.iterations_used
+    );
+    let v1_err = (result.v1 - v1_kep).norm();
+    assert!(
+        v1_err < 1e-3,
+        "v1 error at 170° = {v1_err:.6e} km/s"
+    );
+}

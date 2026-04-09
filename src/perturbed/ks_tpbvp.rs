@@ -16,7 +16,6 @@ use crate::perturbed::chebyshev::{
     cgl_nodes, chebyshev_t_all, coefficients_from_nodes,
     coefficients_from_nodes_3d, integrate_chebyshev_coeffs, integrate_chebyshev_coeffs_3d,
 };
-use crate::perturbed::mcpi::{mcpi_propagate, McpiConfig};
 
 // =========================================================================
 // KS transformation utilities
@@ -316,44 +315,48 @@ pub fn solve_ks_tpbvp(
     let (u2, ds_kep) = ks_two_body_endpoint(&u1, &up1_guess, h0, dt);
 
     // ------------------------------------------------------------------
-    // Step 2: IVP warm start in Cartesian, then convert to KS
+    // Step 2: Exact two-body warm start in KS (harmonic oscillator)
     // ------------------------------------------------------------------
-    let ivp_config = McpiConfig {
-        poly_degree: n,
-        max_iterations: config.max_iterations,
-        tolerance: config.tolerance,
-    };
-    let ivp_state = mcpi_propagate(r1, v0_guess, t0, tf, force_model, &ivp_config);
+    // The KS harmonic oscillator: u(s) = u1 cos(ωs) + (u'₁/ω) sin(ωs)
+    // This gives the EXACT trajectory at fictitious-time CGL nodes.
+    let omega = (-h0 / 2.0).sqrt();
+
+    let tau_nodes = cgl_nodes(n);
+    let t_all: Vec<Vec<f64>> = tau_nodes.iter().map(|&t| chebyshev_t_all(n, t)).collect();
 
     let mut u_nodes: Vec<KsVec4> = Vec::with_capacity(n + 1);
     let mut up_nodes: Vec<KsVec4> = Vec::with_capacity(n + 1);
     let mut h_nodes: Vec<f64> = Vec::with_capacity(n + 1);
 
-    // Compute average radius for Δs estimate
-    let mut r_sum = 0.0;
     for j in 0..=n {
-        let rj = &ivp_state.positions[j];
-        let vj = &ivp_state.velocities[j];
-        let uj = cartesian_to_ks(rj);
-        let upj = cartesian_vel_to_ks(&uj, vj);
-        let hj = vj.norm_squared() / 2.0 - mu / rj.norm();
-        u_nodes.push(uj);
-        up_nodes.push(upj);
-        h_nodes.push(hj);
-        r_sum += rj.norm();
+        let frac = (tau_nodes[j] + 1.0) / 2.0; // 0 at τ=-1, 1 at τ=+1
+        let s_j = ds_kep * frac;
+        let cs = (omega * s_j).cos();
+        let sn = (omega * s_j).sin();
+
+        let u_j = [
+            u1[0] * cs + up1_guess[0] / omega * sn,
+            u1[1] * cs + up1_guess[1] / omega * sn,
+            u1[2] * cs + up1_guess[2] / omega * sn,
+            u1[3] * cs + up1_guess[3] / omega * sn,
+        ];
+        let up_j = [
+            -u1[0] * omega * sn + up1_guess[0] * cs,
+            -u1[1] * omega * sn + up1_guess[1] * cs,
+            -u1[2] * omega * sn + up1_guess[2] * cs,
+            -u1[3] * omega * sn + up1_guess[3] * cs,
+        ];
+
+        u_nodes.push(u_j);
+        up_nodes.push(up_j);
+        h_nodes.push(h0);
     }
-    let _r_avg = r_sum / (n + 1) as f64;
 
     // ------------------------------------------------------------------
     // Step 3: Fictitious time interval from Keplerian propagation
     // ------------------------------------------------------------------
     let mut w = ds_kep / 2.0;
 
-    // ------------------------------------------------------------------
-    // Step 4: Set up CGL nodes and precompute T_k(τ_j)
-    // ------------------------------------------------------------------
-    let tau_nodes = cgl_nodes(n);
-    let t_all: Vec<Vec<f64>> = tau_nodes.iter().map(|&t| chebyshev_t_all(n, t)).collect();
     let mut t_phys_nodes: Vec<f64> = Vec::with_capacity(n + 1);
 
     let mut converged = false;
