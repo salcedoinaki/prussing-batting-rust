@@ -12,6 +12,7 @@ use crate::perturbed::chebyshev::{
     cgl_nodes, chebyshev_t_all, coefficients_from_nodes_3d, integrate_chebyshev_coeffs_3d,
     tau_to_time,
 };
+use crate::perturbed::mcpi::{mcpi_propagate, McpiConfig};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -86,31 +87,36 @@ pub fn solve_tpbvp(
 
     let r1v = [r1.x, r1.y, r1.z];
     let r2v = [r2.x, r2.y, r2.z];
-    let v0g = [v0_guess.x, v0_guess.y, v0_guess.z];
 
     // ------------------------------------------------------------------
-    // Initial guess: linear interpolation in position, constant velocity
+    // Warm start: IVP propagation from (r1, v0_guess) under force model.
+    // This produces a trajectory at physically realistic positions,
+    // avoiding the altitude-dip problem of naive linear interpolation.
     // ------------------------------------------------------------------
-    // CGL ordering: j=0 is τ=1 (endpoint r2), j=n is τ=-1 (endpoint r1)
-    let mut pos_nodes: Vec<[f64; 3]> = Vec::with_capacity(n + 1);
-    let mut vel_nodes: Vec<[f64; 3]> = Vec::with_capacity(n + 1);
-    for j in 0..=n {
-        // fraction: 0.0 at τ=-1 (r1), 1.0 at τ=+1 (r2)
-        let frac = (tau[j] + 1.0) / 2.0;
-        pos_nodes.push([
-            r1v[0] + frac * (r2v[0] - r1v[0]),
-            r1v[1] + frac * (r2v[1] - r1v[1]),
-            r1v[2] + frac * (r2v[2] - r1v[2]),
-        ]);
-        vel_nodes.push(v0g);
-    }
+    let ivp_config = McpiConfig {
+        poly_degree: n,
+        max_iterations: config.max_iterations,
+        tolerance: config.tolerance,
+    };
+    let ivp_state = mcpi_propagate(r1, v0_guess, t0, tf, force_model, &ivp_config);
+
+    let mut pos_nodes: Vec<[f64; 3]> = ivp_state
+        .positions
+        .iter()
+        .map(|p| [p.x, p.y, p.z])
+        .collect();
+    let mut vel_nodes: Vec<[f64; 3]> = ivp_state
+        .velocities
+        .iter()
+        .map(|v| [v.x, v.y, v.z])
+        .collect();
 
     // Pre-compute T_k(τ_j) for all nodes and degrees
     let t_all: Vec<Vec<f64>> = tau.iter().map(|&t| chebyshev_t_all(n, t)).collect();
 
     let mut converged = false;
     let mut iterations_used = 0;
-    let mut v0 = v0g;
+    let mut v0 = [v0_guess.x, v0_guess.y, v0_guess.z];
 
     // ------------------------------------------------------------------
     // Picard iteration
