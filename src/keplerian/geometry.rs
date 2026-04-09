@@ -110,6 +110,102 @@ pub fn time_parabolic(s: f64, c: f64, theta: f64, mu: f64) -> f64 {
     (2.0_f64).sqrt() / 3.0 * (s.powf(1.5) - sgn * (s - c).powf(1.5)) / mu.sqrt()
 }
 
+/// Find the semi-major axis `a_tmin` that gives the minimum possible
+/// elliptic transfer time for `n_revs ≥ 1` complete revolutions.
+///
+/// This solves `f(a) = 0` via Newton's method, where `f(a)` is given by
+/// Prussing Eq. 34 and its derivative by Eq. 35.
+///
+/// Returns `None` if Newton iteration fails to converge (shouldn't happen
+/// for well-posed inputs with `n_revs ≥ 1`).
+pub fn find_a_tmin(s: f64, c: f64, theta: f64, n_revs: u32, mu: f64) -> Option<f64> {
+    if n_revs == 0 {
+        return None; // N=0 has no minimum transfer time (goes to parabolic)
+    }
+
+    let n = n_revs as f64;
+    let a_m = s / 2.0;
+    let mut a = a_m * 1.001; // initial guess just above minimum-energy axis
+
+    for _ in 0..50 {
+        let (alpha_0, beta_0) = auxiliary_angles_principal(a, s, c);
+        let beta = if theta <= PI { beta_0 } else { -beta_0 };
+        // For the minimum-time search, use alpha = alpha_0 (lower branch)
+        let alpha = alpha_0;
+
+        let xi = alpha - beta;
+        let eta = alpha.sin() - beta.sin();
+
+        // f(a) from Eq. 34
+        let f_val = (6.0 * n * PI + 3.0 * xi - eta)
+            * (xi.sin() + eta)
+            - 8.0 * (1.0 - xi.cos());
+
+        if f_val.abs() < 1e-14 {
+            return Some(a);
+        }
+
+        // f'(a) from Eq. 35
+        let tan_alpha_half = (alpha / 2.0).tan();
+        let tan_beta_half = (beta / 2.0).tan();
+
+        let da_alpha = -tan_alpha_half / a; // dα/da
+        let da_beta = -tan_beta_half / a; // dβ/da
+
+        let cos_xi = xi.cos();
+        let cos_alpha = alpha.cos();
+        let cos_beta = beta.cos();
+        let sin_xi = xi.sin();
+
+        // Chain rule: df/da = (df/dα)(dα/da) + (df/dβ)(dβ/da)
+        // df/dα:
+        let df_dalpha = (3.0 - cos_alpha) * (sin_xi + eta)
+            + (6.0 * n * PI + 3.0 * xi - eta) * (cos_xi + cos_alpha)
+            - 8.0 * sin_xi;
+        // df/dβ:
+        let df_dbeta = (-3.0 - cos_beta) * (sin_xi + eta)
+            + (6.0 * n * PI + 3.0 * xi - eta) * (-cos_xi - cos_beta)
+            + 8.0 * sin_xi;
+
+        let f_prime = df_dalpha * da_alpha + df_dbeta * da_beta;
+
+        if f_prime.abs() < 1e-30 {
+            return Some(a); // derivative vanished, treat as converged
+        }
+
+        let delta = f_val / f_prime;
+        a -= delta;
+
+        // Keep a above a_m
+        if a <= a_m {
+            a = a_m * 1.0001;
+        }
+
+        if delta.abs() < 1e-14 * a_m {
+            return Some(a);
+        }
+    }
+
+    Some(a) // return best effort
+}
+
+/// Minimum possible elliptic transfer time for `n_revs ≥ 1` revolutions.
+///
+/// This is the time at `a_tmin` (blue dots in Paper 2, Fig. 5), NOT the
+/// minimum-energy time `t_m` (red dots). For N=0 returns the parabolic time.
+pub fn time_min_transfer(s: f64, c: f64, theta: f64, n_revs: u32, mu: f64) -> f64 {
+    if n_revs == 0 {
+        return time_parabolic(s, c, theta, mu);
+    }
+    match find_a_tmin(s, c, theta, n_revs, mu) {
+        Some(a_tmin) => {
+            let (alpha, beta) = auxiliary_angles(a_tmin, s, c, theta, false);
+            tof_from_a(a_tmin, alpha, beta, n_revs, mu)
+        }
+        None => f64::MAX,
+    }
+}
+
 /// Time of flight for a given semi-major axis, revolution count, and
 /// auxiliary-angle branch.
 ///
@@ -121,6 +217,30 @@ pub fn tof_from_a(a: f64, alpha: f64, beta: f64, n_revs: u32, mu: f64) -> f64 {
     let xi = alpha - beta;
     let eta = alpha.sin() - beta.sin();
     a.powf(1.5) * (2.0 * n * PI + xi - eta) / mu.sqrt()
+}
+
+/// Derivative of the time of flight with respect to semi-major axis `a`.
+///
+/// From Prussing Eq. 37:
+///   ∂t̃/∂a = (a/(2μ))^{1/2} · f(a) / (sin(α−β) + sin(α) − sin(β))
+///
+/// where `f(a)` is defined in Eq. 34.
+pub fn dtof_da(a: f64, alpha: f64, beta: f64, n_revs: u32, mu: f64) -> f64 {
+    let n = n_revs as f64;
+    let xi = alpha - beta;
+    let eta = alpha.sin() - beta.sin();
+
+    let f_val = (6.0 * n * PI + 3.0 * xi - eta)
+        * (xi.sin() + eta)
+        - 8.0 * (1.0 - xi.cos());
+
+    let denom = xi.sin() + eta;
+    if denom.abs() < 1e-30 {
+        // Near degenerate — return large value to force small Newton step
+        return 1e20;
+    }
+
+    (a / (2.0 * mu)).sqrt() * f_val / denom
 }
 
 #[cfg(test)]
