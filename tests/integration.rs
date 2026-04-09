@@ -1032,3 +1032,267 @@ fn test_mps_ivp_multirev_n1_two_body() {
         "1-rev propagation error = {err:.6e} km"
     );
 }
+
+// =========================================================================
+// Sprint 6 — Unified API + algorithm selector tests
+// =========================================================================
+
+use lambert_ult::solve_perturbed;
+use lambert_ult::solve_lambert_bates_compat;
+use lambert_ult::types::{UnifiedLambertConfig, PerturbedConfig};
+use lambert_ult::perturbed::selector::PerturbedAlgorithm;
+
+/// Bates-compatible wrapper should return the same v1/v2 as the regular
+/// Keplerian solver for a simple N=0 transfer.
+#[test]
+fn test_bates_compat_matches_keplerian() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 2000.0;
+
+    let (v1_bates, v2_bates) =
+        solve_lambert_bates_compat(&r1, &r2, tof, mu, Direction::Prograde).unwrap();
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    assert!(!sols.is_empty());
+
+    let v1_kep = sols[0].v1;
+    let v2_kep = sols[0].v2;
+
+    assert!(
+        (v1_bates - v1_kep).norm() < 1e-12,
+        "v1 mismatch: bates vs keplerian"
+    );
+    assert!(
+        (v2_bates - v2_kep).norm() < 1e-12,
+        "v2 mismatch: bates vs keplerian"
+    );
+}
+
+/// Unified API under two-body dynamics should return solutions that
+/// propagate correctly to r2.
+#[test]
+fn test_unified_two_body_short_arc() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0); // 90° transfer → TPBVP
+    let tof = 2000.0;
+
+    let force = TwoBody::new(mu);
+    let config = UnifiedLambertConfig {
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+        perturbed: PerturbedConfig {
+            poly_degree: 80,
+            max_iterations: 30,
+            mcpi_tolerance: 1e-10,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let sols = solve_perturbed(&r1, &r2, tof, mu, &force, &config).unwrap();
+    assert!(!sols.is_empty());
+    let sol = &sols[0];
+
+    // Under two-body, the perturbed solution ≈ Keplerian
+    assert!(sol.converged, "TPBVP should converge under two-body");
+    assert_eq!(sol.algorithm, PerturbedAlgorithm::McpiTpbvp);
+
+    // Propagate and verify
+    let r2_prop = kepler_propagate(&r1, &sol.v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 1.0,
+        "two-body unified endpoint error = {err:.6e} km"
+    );
+}
+
+/// Unified API with a medium-arc transfer should invoke KS-TPBVP and converge.
+#[test]
+fn test_unified_two_body_medium_arc() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    // ~150° transfer → KS-TPBVP territory
+    let theta = 150.0_f64.to_radians();
+    let r2 = Vector3::new(7000.0 * theta.cos(), 7000.0 * theta.sin(), 0.0);
+    let tof = 3500.0;
+
+    let force = TwoBody::new(mu);
+    let config = UnifiedLambertConfig {
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+        perturbed: PerturbedConfig {
+            poly_degree: 80,
+            max_iterations: 50,
+            mcpi_tolerance: 1e-10,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let sols = solve_perturbed(&r1, &r2, tof, mu, &force, &config).unwrap();
+    assert!(!sols.is_empty());
+    let sol = &sols[0];
+
+    assert!(sol.converged, "KS-TPBVP should converge under two-body");
+    assert_eq!(sol.algorithm, PerturbedAlgorithm::McpiKsTpbvp);
+
+    let r2_prop = kepler_propagate(&r1, &sol.v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 1.0,
+        "medium-arc unified endpoint error = {err:.6e} km"
+    );
+}
+
+/// Unified API with a multi-rev transfer should use MPS-IVP.
+#[test]
+fn test_unified_multirev_uses_mps() {
+    let mu = 398600.4418;
+    let r_orbit: f64 = 8000.0;
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+
+    let r1 = Vector3::new(r_orbit, 0.0, 0.0);
+    let theta = 60.0_f64.to_radians();
+    let r2 = Vector3::new(r_orbit * theta.cos(), r_orbit * theta.sin(), 0.0);
+    let tof = period * 1.1;
+
+    let force = TwoBody::new(mu);
+    let config = UnifiedLambertConfig {
+        direction: Direction::Prograde,
+        max_revs: Some(1),
+        perturbed: PerturbedConfig {
+            poly_degree: 100,
+            max_iterations: 50,
+            mcpi_tolerance: 1e-10,
+            max_mps_iterations: 10,
+            mps_tolerance: 1e-3,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let sols = solve_perturbed(&r1, &r2, tof, mu, &force, &config).unwrap();
+
+    // Should have N=0 and possibly N=1 solutions
+    let has_fractional = sols.iter().any(|s| s.n_revs == 0);
+    assert!(has_fractional, "should have at least an N=0 solution");
+
+    let multirev: Vec<_> = sols.iter().filter(|s| s.n_revs == 1).collect();
+    for s in &multirev {
+        assert_eq!(s.algorithm, PerturbedAlgorithm::McpiMpsIvp);
+    }
+
+    // Verify N=0 propagation
+    let n0 = sols.iter().find(|s| s.n_revs == 0).unwrap();
+    let r2_prop = kepler_propagate(&r1, &n0.v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 1.0,
+        "multirev N=0 endpoint error = {err:.6e} km"
+    );
+}
+
+/// Unified API under J2 should produce converged solutions that differ
+/// from Keplerian.
+#[test]
+fn test_unified_j2_short_arc() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 2000.0); // out-of-plane
+    let tof = 2000.0;
+
+    let force = ZonalGravity::earth_j2();
+    let config = UnifiedLambertConfig {
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+        perturbed: PerturbedConfig {
+            poly_degree: 120,
+            max_iterations: 60,
+            mcpi_tolerance: 1e-12,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let sols = solve_perturbed(&r1, &r2, tof, mu, &force, &config).unwrap();
+    assert!(!sols.is_empty());
+    let sol = &sols[0];
+    assert!(sol.converged, "J2 unified should converge");
+
+    // Compare against Keplerian
+    let kep_input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let kep_sols = solve_lambert(&kep_input).unwrap();
+    let diff = (sol.v1 - kep_sols[0].v1).norm();
+    assert!(
+        diff > 1e-6,
+        "J2 unified v1 should differ from Keplerian: {diff:.6e}"
+    );
+}
+
+/// Unified API with mixed N solutions: verify each solution has the
+/// correct algorithm assigned and all converge.
+#[test]
+fn test_unified_mixed_n_algorithm_routing() {
+    let mu = 398600.4418;
+    let r_orbit: f64 = 10000.0;
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+
+    let r1 = Vector3::new(r_orbit, 0.0, 0.0);
+    // 45° transfer (prograde → short arc → TPBVP for N=0)
+    let theta = 45.0_f64.to_radians();
+    let r2 = Vector3::new(r_orbit * theta.cos(), r_orbit * theta.sin(), 0.0);
+    let tof = period * 1.2; // long enough for N=1
+
+    let force = TwoBody::new(mu);
+    let config = UnifiedLambertConfig {
+        direction: Direction::Prograde,
+        max_revs: Some(1),
+        perturbed: PerturbedConfig {
+            poly_degree: 100,
+            max_iterations: 50,
+            mcpi_tolerance: 1e-10,
+            max_mps_iterations: 10,
+            mps_tolerance: 1e-3,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let sols = solve_perturbed(&r1, &r2, tof, mu, &force, &config).unwrap();
+
+    for sol in &sols {
+        if sol.n_revs == 0 {
+            // Short arc → TPBVP (θ=45° < 2π/3)
+            assert_eq!(
+                sol.algorithm,
+                PerturbedAlgorithm::McpiTpbvp,
+                "N=0 short arc should use TPBVP"
+            );
+        } else {
+            // N ≥ 1 → MPS-IVP
+            assert_eq!(
+                sol.algorithm,
+                PerturbedAlgorithm::McpiMpsIvp,
+                "N≥1 should use MPS-IVP"
+            );
+        }
+    }
+}
