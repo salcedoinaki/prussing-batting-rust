@@ -1,4 +1,10 @@
+pub mod composite;
+pub mod drag;
+pub mod ephemeris;
 pub mod gravity;
+pub mod spherical_harmonics;
+pub mod srp;
+pub mod third_body;
 pub mod two_body;
 
 use nalgebra::Vector3;
