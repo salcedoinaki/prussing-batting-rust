@@ -16,6 +16,7 @@ use crate::perturbed::chebyshev::{
     cgl_nodes, chebyshev_t_all, coefficients_from_nodes,
     coefficients_from_nodes_3d, integrate_chebyshev_coeffs, integrate_chebyshev_coeffs_3d,
 };
+use crate::perturbed::mcpi::{mcpi_propagate, McpiConfig};
 
 // =========================================================================
 // KS transformation utilities
@@ -265,52 +266,52 @@ pub fn solve_ks_tpbvp(
     let u1 = cartesian_to_ks(r1);
     let u2 = cartesian_to_ks(r2);
 
-    // Initial KS velocity from Keplerian guess
-    let u1_prime_guess = cartesian_vel_to_ks(&u1, v0_guess);
-
-    // Orbital energy from vis-viva
+    // Orbital energy from vis-viva (for the iteration)
     let r1_mag = r1.norm();
     let v0_sq = v0_guess.norm_squared();
     let h0 = v0_sq / 2.0 - mu / r1_mag;
 
     // ------------------------------------------------------------------
-    // Step 2: Estimate fictitious time interval [0, Δs]
+    // Step 2: IVP warm start in Cartesian, then convert to KS
     // ------------------------------------------------------------------
-    let ds_total = estimate_fictitious_time(r1, r2, dt, mu, a_guess);
-    let mut w = ds_total / 2.0; // half-interval in fictitious time (adjustable)
+    let ivp_config = McpiConfig {
+        poly_degree: n,
+        max_iterations: config.max_iterations,
+        tolerance: config.tolerance,
+    };
+    let ivp_state = mcpi_propagate(r1, v0_guess, t0, tf, force_model, &ivp_config);
 
-    // ------------------------------------------------------------------
-    // Step 3: Set up CGL nodes in fictitious time
-    // ------------------------------------------------------------------
-    let tau_nodes = cgl_nodes(n);
-
-    // ------------------------------------------------------------------
-    // Step 4: Initial guess — linear interpolation in KS space + IVP warm start
-    // ------------------------------------------------------------------
-    // We'll use a two-body IVP propagation in KS space for warm start.
-    // First, build an initial trajectory estimate via linear interpolation
-    // from u1 to u2, then iteratively refine.
     let mut u_nodes: Vec<KsVec4> = Vec::with_capacity(n + 1);
     let mut up_nodes: Vec<KsVec4> = Vec::with_capacity(n + 1);
     let mut h_nodes: Vec<f64> = Vec::with_capacity(n + 1);
-    let mut t_phys_nodes: Vec<f64> = Vec::with_capacity(n + 1);
 
+    // Compute average radius for Δs estimate
+    let mut r_sum = 0.0;
     for j in 0..=n {
-        let frac = (tau_nodes[j] + 1.0) / 2.0; // 0 at τ=-1 (u1), 1 at τ=+1 (u2)
-        let u_j = [
-            u1[0] + frac * (u2[0] - u1[0]),
-            u1[1] + frac * (u2[1] - u1[1]),
-            u1[2] + frac * (u2[2] - u1[2]),
-            u1[3] + frac * (u2[3] - u1[3]),
-        ];
-        u_nodes.push(u_j);
-        up_nodes.push(u1_prime_guess);
-        h_nodes.push(h0);
-        t_phys_nodes.push(t0 + frac * dt);
+        let rj = &ivp_state.positions[j];
+        let vj = &ivp_state.velocities[j];
+        let uj = cartesian_to_ks(rj);
+        let upj = cartesian_vel_to_ks(&uj, vj);
+        let hj = vj.norm_squared() / 2.0 - mu / rj.norm();
+        u_nodes.push(uj);
+        up_nodes.push(upj);
+        h_nodes.push(hj);
+        r_sum += rj.norm();
     }
+    let r_avg = r_sum / (n + 1) as f64;
 
-    // Pre-compute T_k(τ_j)
+    // ------------------------------------------------------------------
+    // Step 3: Estimate fictitious time interval
+    // ------------------------------------------------------------------
+    let ds_total = dt / r_avg;
+    let mut w = ds_total / 2.0;
+
+    // ------------------------------------------------------------------
+    // Step 4: Set up CGL nodes and precompute T_k(τ_j)
+    // ------------------------------------------------------------------
+    let tau_nodes = cgl_nodes(n);
     let t_all: Vec<Vec<f64>> = tau_nodes.iter().map(|&t| chebyshev_t_all(n, t)).collect();
+    let mut t_phys_nodes: Vec<f64> = Vec::with_capacity(n + 1);
 
     let mut converged = false;
     let mut iterations_used = 0;
