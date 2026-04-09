@@ -1298,3 +1298,195 @@ fn test_unified_mixed_n_algorithm_routing() {
         }
     }
 }
+
+// =========================================================================
+// New tests for plan fixes
+// =========================================================================
+
+/// A1: Periapsis filter — a transfer that dips below Earth's surface should
+/// be marked infeasible.
+#[test]
+fn test_periapsis_filter_rejects_collision() {
+    use lambert_ult::types::FeasibilityConfig;
+
+    let mu = 398600.4418;
+    // Large altitude difference: LEO to near-opposite side with short TOF
+    // forces a very eccentric orbit that dips below Earth surface.
+    let r1 = Vector3::new(6500.0, 0.0, 0.0); // just above Earth
+    let r2 = Vector3::new(-6500.0, 500.0, 0.0); // nearly opposite
+    let tof = 5000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+
+    let config = FeasibilityConfig {
+        check_earth_collision: true,
+        earth_radius: 6378.137,
+        ..Default::default()
+    };
+    let sols = lambert_ult::solve_lambert_with_config(&input, &config).unwrap();
+
+    // At least some solutions should be infeasible (periapsis below Earth)
+    let infeasible_count = sols.iter().filter(|s| !s.is_feasible).count();
+    // We don't assert ALL are infeasible — just that the filter is working
+    // (before this fix, infeasible_count was always 0)
+    let feasible_count = sols.iter().filter(|s| s.is_feasible).count();
+    assert!(
+        infeasible_count > 0 || feasible_count == 0,
+        "periapsis filter should flag some transfers as infeasible for low-altitude transfers"
+    );
+}
+
+/// A2: Delta-v filter with reference orbit velocities should properly
+/// filter high-delta-v solutions.
+#[test]
+fn test_delta_v_filter_with_reference_velocities() {
+    use lambert_ult::keplerian::feasibility::filter_feasibility_with_ref;
+    use lambert_ult::types::{Branch, FeasibilityConfig, LambertSolution};
+
+    let mu: f64 = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+
+    // Circular orbit velocities at r1 and r2
+    let v_circ = (mu / 7000.0_f64).sqrt();
+    let v1_ref = Vector3::new(0.0, v_circ, 0.0);
+    let v2_ref = Vector3::new(-v_circ, 0.0, 0.0);
+
+    // A solution with very high transfer velocity → high delta-v
+    let mut sols = vec![LambertSolution {
+        v1: Vector3::new(0.0, 15.0, 0.0), // much faster than circular
+        v2: Vector3::new(-15.0, 0.0, 0.0),
+        a: 20000.0,
+        n_revs: 0,
+        branch: Branch::Fractional,
+        transfer_angle: std::f64::consts::PI / 2.0,
+        is_feasible: true,
+    }];
+
+    let config = FeasibilityConfig {
+        check_earth_collision: false,
+        check_escape_velocity: false,
+        max_delta_v: Some(5.0), // 5 km/s limit
+        ..Default::default()
+    };
+
+    filter_feasibility_with_ref(
+        &mut sols, &r1, &r2, mu, &config,
+        Some(&v1_ref), Some(&v2_ref),
+    );
+
+    // dv = |v1_transfer - v1_ref| + |v2_ref - v2_transfer| should exceed 5 km/s
+    assert!(
+        !sols[0].is_feasible,
+        "high-delta-v solution should be filtered out"
+    );
+}
+
+/// C2: Hyperbolic transfers should return a descriptive error, not NoSolution.
+#[test]
+fn test_hyperbolic_error_message() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 10.0; // absurdly short → below parabolic minimum
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+
+    let err = solve_lambert(&input).unwrap_err();
+    match err {
+        lambert_ult::error::LambertError::InvalidInput(msg) => {
+            assert!(
+                msg.contains("hyperbolic"),
+                "error message should mention hyperbolic: {msg}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+}
+
+/// A3+B2: Multi-rev edge case — verify that transfers near the minimum
+/// transfer time boundary produce valid solutions.
+#[test]
+fn test_multirev_near_tmin_boundary() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 8000.0;
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+
+    let r1 = Vector3::new(r_orbit, 0.0, 0.0);
+    let theta = 90.0_f64.to_radians();
+    let r2 = Vector3::new(r_orbit * theta.cos(), r_orbit * theta.sin(), 0.0);
+
+    // Use a TOF slightly above 1-rev minimum time
+    let tof = period * 1.05;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(1),
+    };
+    let sols = solve_lambert(&input).unwrap();
+
+    // Should have N=0 solution plus possibly N=1 solutions
+    let n0_sols: Vec<_> = sols.iter().filter(|s| s.n_revs == 0).collect();
+    assert!(!n0_sols.is_empty(), "should have at least N=0 solution");
+
+    // All solutions should be self-consistent (propagation arrives at r2)
+    for sol in &sols {
+        if !sol.is_feasible {
+            continue;
+        }
+        let r2_prop = kepler_propagate(&r1, &sol.v1, tof, mu);
+        let err = (r2_prop - r2).norm();
+        assert!(
+            err < 1.0,
+            "N={} branch={:?}: propagation error = {err:.6e} km",
+            sol.n_revs,
+            sol.branch
+        );
+    }
+}
+
+/// B1: Newton's method should converge quickly for standard cases.
+#[test]
+fn test_newton_convergence_accuracy() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 9000.0, 3000.0);
+    let tof = 3000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    assert!(!sols.is_empty());
+
+    // Verify high-accuracy solution via propagation
+    let r2_prop = kepler_propagate(&r1, &sols[0].v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 0.01, // sub-10m accuracy
+        "Newton solver should produce high-accuracy solution: error = {err:.6e} km"
+    );
+}

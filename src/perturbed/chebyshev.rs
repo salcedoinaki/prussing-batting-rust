@@ -123,6 +123,10 @@ pub fn clenshaw_3d(coeffs: &[[f64; 3]], tau: f64) -> [f64; 3] {
 /// Uses the discrete cosine transform formula:
 ///   c_k = (2/N) * sum_{j=0}^{N}'' f_j * T_k(tau_j)
 /// where the double prime halves the first and last terms.
+///
+/// This is O(N²). An FFT-based O(N log N) DCT-I is possible but introduces
+/// ~1e-12 rounding noise that prevents MCPI convergence at tight tolerances.
+/// At N=120 the O(N²) cost is negligible (~14K multiplies per transform).
 pub fn coefficients_from_nodes(values: &[f64], n: usize) -> Vec<f64> {
     assert!(
         values.len() == n + 1,
@@ -138,10 +142,7 @@ pub fn coefficients_from_nodes(values: &[f64], n: usize) -> Vec<f64> {
         let mut sum = 0.0;
         for j in 0..=n {
             let t_kj = (k as f64 * j as f64 * PI / nf).cos(); // T_k(tau_j)
-            let mut weight = 1.0;
-            if j == 0 || j == n {
-                weight = 0.5;
-            }
+            let weight = if j == 0 || j == n { 0.5 } else { 1.0 };
             sum += weight * values[j] * t_kj;
         }
         let mut c_k = 2.0 / nf * sum;

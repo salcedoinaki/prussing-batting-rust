@@ -55,6 +55,29 @@ impl ZonalGravity {
 }
 
 impl ForceModel for ZonalGravity {
+    /// Low-fidelity acceleration for MPS-IVP particular solutions
+    /// (Woollands et al. 2017, Eqs. 18–21).
+    ///
+    /// For `ZonalGravity`, the low-fidelity model returns the full zonal
+    /// acceleration (same as `acceleration`). The variable-fidelity
+    /// optimisation is only beneficial when the full model includes
+    /// expensive tesseral/sectoral harmonics (e.g., a 40×40 spherical
+    /// harmonic expansion). Since `ZonalGravity` contains only zonal
+    /// terms, there is no cheaper approximation that preserves accuracy.
+    ///
+    /// When a full spherical harmonic model is implemented, its
+    /// `acceleration_low_fidelity` should return two-body + zonals.
+    fn acceleration_low_fidelity(
+        &self,
+        _t: f64,
+        r: &Vector3<f64>,
+        _v: &Vector3<f64>,
+    ) -> Vector3<f64> {
+        // Delegate to full model — zonals are already "low fidelity"
+        // relative to a full spherical harmonic expansion.
+        self.acceleration(_t, r, _v)
+    }
+
     fn acceleration(&self, _t: f64, r: &Vector3<f64>, _v: &Vector3<f64>) -> Vector3<f64> {
         let r_mag = r.norm();
         let r_sq = r_mag * r_mag;

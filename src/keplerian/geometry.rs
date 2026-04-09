@@ -118,7 +118,7 @@ pub fn time_parabolic(s: f64, c: f64, theta: f64, mu: f64) -> f64 {
 ///
 /// Returns `None` if Newton iteration fails to converge (shouldn't happen
 /// for well-posed inputs with `n_revs ≥ 1`).
-pub fn find_a_tmin(s: f64, c: f64, theta: f64, n_revs: u32, mu: f64) -> Option<f64> {
+pub fn find_a_tmin(s: f64, c: f64, theta: f64, n_revs: u32, _mu: f64) -> Option<f64> {
     if n_revs == 0 {
         return None; // N=0 has no minimum transfer time (goes to parabolic)
     }
@@ -221,26 +221,30 @@ pub fn tof_from_a(a: f64, alpha: f64, beta: f64, n_revs: u32, mu: f64) -> f64 {
 
 /// Derivative of the time of flight with respect to semi-major axis `a`.
 ///
-/// From Prussing Eq. 37:
-///   ∂t̃/∂a = (a/(2μ))^{1/2} · f(a) / (sin(α−β) + sin(α) − sin(β))
+/// Computed via the chain rule from:
+///   √μ · t = a^{3/2} · (2Nπ + α − β − (sinα − sinβ))
 ///
-/// where `f(a)` is defined in Eq. 34.
+/// The auxiliary angles depend on `a` through:
+///   sin(α/2) = √(s/2a)  →  dα/da = −tan(α/2) / a
+///   sin(β/2) = √((s−c)/2a)  →  dβ/da = −tan(β/2) / a
 pub fn dtof_da(a: f64, alpha: f64, beta: f64, n_revs: u32, mu: f64) -> f64 {
     let n = n_revs as f64;
     let xi = alpha - beta;
     let eta = alpha.sin() - beta.sin();
+    let bracket = 2.0 * n * PI + xi - eta;
 
-    let f_val = (6.0 * n * PI + 3.0 * xi - eta)
-        * (xi.sin() + eta)
-        - 8.0 * (1.0 - xi.cos());
+    // t = a^{3/2}/√μ · bracket
+    // dt/da = (3/2)a^{1/2}/√μ · bracket + a^{3/2}/√μ · d(bracket)/da
 
-    let denom = xi.sin() + eta;
-    if denom.abs() < 1e-30 {
-        // Near degenerate — return large value to force small Newton step
-        return 1e20;
-    }
+    // Derivatives of α, β w.r.t. a
+    let da_alpha = -(alpha / 2.0).tan() / a;
+    let da_beta = -(beta / 2.0).tan() / a;
 
-    (a / (2.0 * mu)).sqrt() * f_val / denom
+    // d(bracket)/da = (1 - cosα)·dα/da − (1 - cosβ)·dβ/da
+    let d_bracket = (1.0 - alpha.cos()) * da_alpha - (1.0 - beta.cos()) * da_beta;
+
+    let sqrt_mu = mu.sqrt();
+    (3.0 / 2.0) * a.sqrt() / sqrt_mu * bracket + a.powf(1.5) / sqrt_mu * d_bracket
 }
 
 #[cfg(test)]
