@@ -1,3 +1,4 @@
+pub mod gravity;
 pub mod two_body;
 
 use nalgebra::Vector3;

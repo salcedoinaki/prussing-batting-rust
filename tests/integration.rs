@@ -333,3 +333,270 @@ fn test_mcpi_evaluate_at_intermediate_vs_kepler() {
         );
     }
 }
+
+// =========================================================================
+// Sprint 2.6 — Perturbed propagation validation (MCPI + J2 vs RK4)
+// =========================================================================
+
+use lambert_ult::force_models::gravity::ZonalGravity;
+use lambert_ult::force_models::ForceModel;
+use lambert_ult::perturbed::tpbvp::{solve_tpbvp, TpbvpConfig};
+
+/// Simple RK4 propagator for test reference.
+fn rk4_propagate(
+    r0: &Vector3<f64>,
+    v0: &Vector3<f64>,
+    dt: f64,
+    n_steps: usize,
+    force: &dyn ForceModel,
+) -> (Vector3<f64>, Vector3<f64>) {
+    let h = dt / n_steps as f64;
+    let mut r = *r0;
+    let mut v = *v0;
+
+    for _ in 0..n_steps {
+        let a1 = force.acceleration(0.0, &r, &v);
+        let r2 = r + 0.5 * h * v;
+        let v2 = v + 0.5 * h * a1;
+        let a2 = force.acceleration(0.0, &r2, &v2);
+        let r3 = r + 0.5 * h * v2;
+        let v3 = v + 0.5 * h * a2;
+        let a3 = force.acceleration(0.0, &r3, &v3);
+        let r4 = r + h * v3;
+        let v4 = v + h * a3;
+        let a4 = force.acceleration(0.0, &r4, &v4);
+
+        r += h / 6.0 * (v + 2.0 * v2 + 2.0 * v3 + v4);
+        v += h / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4);
+    }
+
+    (r, v)
+}
+
+/// MCPI propagation under J2 should match an RK4 reference for a
+/// near-circular LEO orbit over ~1/4 period.
+#[test]
+fn test_mcpi_j2_vs_rk4_circular() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 7000.0;
+    let v_circ = (mu / r_orbit).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+    let tof = period * 0.25;
+
+    // Inclined orbit so J2 has nontrivial effect
+    let r0 = Vector3::new(r_orbit, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, v_circ * 0.866, v_circ * 0.5); // ~30 deg inclination
+
+    let force = ZonalGravity::earth_j2();
+
+    // RK4 reference with small step size
+    let (r_rk4, _v_rk4) = rk4_propagate(&r0, &v0, tof, 50_000, &force);
+
+    // MCPI propagation
+    let config = McpiConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-12,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged, "MCPI-J2 did not converge");
+
+    let rf_mcpi = &state.positions[0]; // final position at τ=1
+    let err = (rf_mcpi - r_rk4).norm();
+    assert!(
+        err < 0.1,
+        "MCPI vs RK4 (J2, circular, quarter-period) position error = {err:.6e} km"
+    );
+}
+
+/// MCPI under J2 for an eccentric orbit should also match RK4.
+#[test]
+fn test_mcpi_j2_vs_rk4_eccentric() {
+    let mu: f64 = 398600.4418;
+    let a: f64 = 10000.0;
+    let e: f64 = 0.3;
+    let rp = a * (1.0 - e);
+    let vp = (mu * (1.0 + e) / (a * (1.0 - e))).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (a.powi(3) / mu).sqrt();
+    let tof = period * 0.3;
+
+    // Inclined orbit
+    let r0 = Vector3::new(rp, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, vp * 0.866, vp * 0.5);
+
+    let force = ZonalGravity::earth_j2();
+
+    let (r_rk4, _v_rk4) = rk4_propagate(&r0, &v0, tof, 60_000, &force);
+
+    let config = McpiConfig {
+        poly_degree: 100,
+        max_iterations: 40,
+        tolerance: 1e-12,
+    };
+    let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
+    assert!(state.converged, "MCPI-J2 eccentric did not converge");
+
+    let rf_mcpi = &state.positions[0];
+    let err = (rf_mcpi - r_rk4).norm();
+    assert!(
+        err < 0.5,
+        "MCPI vs RK4 (J2, e=0.3) position error = {err:.6e} km"
+    );
+}
+
+/// Verify that J2 propagation differs measurably from two-body propagation.
+#[test]
+fn test_j2_differs_from_two_body() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 7000.0;
+    let v_circ = (mu / r_orbit).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+    let tof = period * 0.5;
+
+    let r0 = Vector3::new(r_orbit, 0.0, 0.0);
+    let v0 = Vector3::new(0.0, v_circ * 0.866, v_circ * 0.5);
+
+    let force_j2 = ZonalGravity::earth_j2();
+    let force_tb = TwoBody::new(mu);
+
+    let config = McpiConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+
+    let state_j2 = mcpi_propagate(&r0, &v0, 0.0, tof, &force_j2, &config);
+    let state_tb = mcpi_propagate(&r0, &v0, 0.0, tof, &force_tb, &config);
+    assert!(state_j2.converged);
+    assert!(state_tb.converged);
+
+    let diff = (&state_j2.positions[0] - &state_tb.positions[0]).norm();
+    assert!(
+        diff > 1.0,
+        "J2 and two-body should differ by > 1 km over half-period, got {diff:.4} km"
+    );
+}
+
+// =========================================================================
+// Sprint 3.3 — MCPI-TPBVP validation
+// =========================================================================
+
+/// Under J2, the TPBVP solution's departure velocity should differ from
+/// the Keplerian solution.
+#[test]
+fn test_tpbvp_j2_differs_from_keplerian() {
+    let mu: f64 = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 3000.0); // out-of-plane so J2 matters
+    let tof = 2000.0;
+
+    let input = lambert_ult::types::LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: lambert_ult::types::Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = lambert_ult::solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = TpbvpConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+    let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "TPBVP-J2 should converge ({} iters)",
+        result.iterations_used
+    );
+
+    let diff = (result.v1 - v1_kep).norm();
+    assert!(
+        diff > 1e-6,
+        "J2 perturbed v1 should differ from Keplerian by > 1e-6 km/s, got {diff:.6e}"
+    );
+}
+
+/// The TPBVP solution under J2 should be self-consistent: propagating
+/// (r1, v1_tpbvp) under the same J2 force model should arrive at r2.
+#[test]
+fn test_tpbvp_j2_propagation_consistency() {
+    let mu: f64 = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 3000.0);
+    let tof = 2000.0;
+
+    // Keplerian warm start
+    let input = lambert_ult::types::LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: lambert_ult::types::Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = lambert_ult::solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = TpbvpConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+    let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(result.converged);
+
+    // Forward-propagate (r1, v1_tpbvp) under J2 using RK4
+    let (rf, _vf) = rk4_propagate(&r1, &result.v1, tof, 50_000, &force);
+    let pos_err = (rf - r2).norm();
+    assert!(
+        pos_err < 1.0,
+        "propagated endpoint error = {pos_err:.6e} km (should be < 1 km)"
+    );
+}
+
+/// Verify the TPBVP solver also works for a retrograde transfer with J2.
+#[test]
+fn test_tpbvp_j2_retrograde() {
+    let mu: f64 = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 3600.0;
+
+    let input = lambert_ult::types::LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: lambert_ult::types::Direction::Retrograde,
+        max_revs: Some(0),
+    };
+    let sols = lambert_ult::solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = TpbvpConfig {
+        poly_degree: 80,
+        max_iterations: 30,
+        tolerance: 1e-10,
+    };
+    let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "TPBVP retrograde should converge ({} iters)",
+        result.iterations_used
+    );
+
+    // Propagate forward under J2 and check endpoint
+    let (rf, _vf) = rk4_propagate(&r1, &result.v1, tof, 50_000, &force);
+    let pos_err = (rf - r2).norm();
+    assert!(
+        pos_err < 1.0,
+        "retrograde propagation error = {pos_err:.6e} km"
+    );
+}
