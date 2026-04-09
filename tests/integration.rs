@@ -392,10 +392,10 @@ fn test_mcpi_j2_vs_rk4_circular() {
     // RK4 reference with small step size
     let (r_rk4, _v_rk4) = rk4_propagate(&r0, &v0, tof, 50_000, &force);
 
-    // MCPI propagation
+    // MCPI propagation — J2 perturbation needs higher degree for convergence
     let config = McpiConfig {
-        poly_degree: 80,
-        max_iterations: 30,
+        poly_degree: 120,
+        max_iterations: 60,
         tolerance: 1e-12,
     };
     let state = mcpi_propagate(&r0, &v0, 0.0, tof, &force, &config);
@@ -503,8 +503,8 @@ fn test_tpbvp_j2_differs_from_keplerian() {
 
     let force = ZonalGravity::earth_j2();
     let config = TpbvpConfig {
-        poly_degree: 80,
-        max_iterations: 30,
+        poly_degree: 100,
+        max_iterations: 50,
         tolerance: 1e-10,
     };
     let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
@@ -544,8 +544,8 @@ fn test_tpbvp_j2_propagation_consistency() {
 
     let force = ZonalGravity::earth_j2();
     let config = TpbvpConfig {
-        poly_degree: 80,
-        max_iterations: 30,
+        poly_degree: 100,
+        max_iterations: 50,
         tolerance: 1e-10,
     };
     let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
@@ -561,12 +561,15 @@ fn test_tpbvp_j2_propagation_consistency() {
 }
 
 /// Verify the TPBVP solver also works for a retrograde transfer with J2.
+/// Use positions where the retrograde transfer angle is within the TPBVP
+/// convergence domain (θ < 2π/3).
 #[test]
 fn test_tpbvp_j2_retrograde() {
     let mu: f64 = 398600.4418;
     let r1 = Vector3::new(7000.0, 0.0, 0.0);
-    let r2 = Vector3::new(0.0, 7000.0, 0.0);
-    let tof = 3600.0;
+    // Chosen so that the retrograde (clockwise) transfer angle is small (~45°)
+    let r2 = Vector3::new(5000.0, -5000.0, 1000.0);
+    let tof = 2000.0;
 
     let input = lambert_ult::types::LambertInput {
         r1,
@@ -581,8 +584,8 @@ fn test_tpbvp_j2_retrograde() {
 
     let force = ZonalGravity::earth_j2();
     let config = TpbvpConfig {
-        poly_degree: 80,
-        max_iterations: 30,
+        poly_degree: 100,
+        max_iterations: 50,
         tolerance: 1e-10,
     };
     let result = solve_tpbvp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
