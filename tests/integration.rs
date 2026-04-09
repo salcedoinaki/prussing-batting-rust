@@ -746,3 +746,290 @@ fn test_ks_tpbvp_two_body_near_pi() {
         "v1 error at 170° = {v1_err:.6e} km/s"
     );
 }
+
+// =========================================================================
+// Sprint 5 — MCPI-MPS-IVP multi-revolution solver tests
+// =========================================================================
+
+use lambert_ult::perturbed::mps_ivp::{solve_mps_ivp, MpsIvpConfig};
+
+/// Under two-body dynamics, the MPS-IVP solver should converge when
+/// given the exact Keplerian solution as warm start (identity test).
+#[test]
+fn test_mps_ivp_two_body_n0() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = TwoBody::new(mu);
+    let config = MpsIvpConfig {
+        poly_degree: 80,
+        max_mcpi_iterations: 30,
+        mcpi_tolerance: 1e-10,
+        max_mps_iterations: 10,
+        mps_tolerance: 1e-3,
+        perturbation_scale: 1e-7,
+        variable_fidelity: false,
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "MPS-IVP two-body N=0 should converge, err = {:.6e}",
+        result.terminal_error
+    );
+
+    // v1 should be very close to the Keplerian solution
+    let v_err = (result.v1 - v1_kep).norm();
+    assert!(
+        v_err < 1e-3,
+        "v1 error under two-body: {v_err:.6e} km/s"
+    );
+}
+
+/// MPS-IVP with a slightly perturbed warm start should still converge
+/// to the correct two-body solution.
+#[test]
+fn test_mps_ivp_two_body_perturbed_warmstart() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 0.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    // Perturb warm start by ~0.5%
+    let v1_pert = v1_kep * 1.005;
+
+    let force = TwoBody::new(mu);
+    let config = MpsIvpConfig {
+        poly_degree: 80,
+        max_mcpi_iterations: 30,
+        mcpi_tolerance: 1e-10,
+        max_mps_iterations: 15,
+        mps_tolerance: 1e-3,
+        perturbation_scale: 1e-5,
+        variable_fidelity: false,
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_pert, &force, &config);
+    assert!(
+        result.converged,
+        "MPS-IVP perturbed warm start should converge, err = {:.6e}",
+        result.terminal_error
+    );
+
+    let v_err = (result.v1 - v1_kep).norm();
+    assert!(
+        v_err < 0.05,
+        "v1 should recover Keplerian: error = {v_err:.6e} km/s"
+    );
+}
+
+/// MPS-IVP under J2 should produce a different velocity than the
+/// Keplerian solution for a 3-D transfer.
+#[test]
+fn test_mps_ivp_j2_differs_from_keplerian() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 3000.0); // out-of-plane
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = MpsIvpConfig {
+        poly_degree: 120,
+        max_mcpi_iterations: 60,
+        mcpi_tolerance: 1e-12,
+        max_mps_iterations: 15,
+        mps_tolerance: 1e-4,
+        perturbation_scale: 1e-7,
+        variable_fidelity: false,
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "MPS-IVP J2 should converge, err = {:.6e}",
+        result.terminal_error
+    );
+
+    let diff = (result.v1 - v1_kep).norm();
+    assert!(
+        diff > 1e-6,
+        "J2-perturbed v1 should differ from Keplerian: {diff:.6e}"
+    );
+}
+
+/// MPS-IVP under J2: propagating (r1, v1_mps) under J2 should arrive at r2.
+#[test]
+fn test_mps_ivp_j2_propagation_consistency() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 3000.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = MpsIvpConfig {
+        poly_degree: 120,
+        max_mcpi_iterations: 60,
+        mcpi_tolerance: 1e-12,
+        max_mps_iterations: 15,
+        mps_tolerance: 1e-4,
+        perturbation_scale: 1e-7,
+        variable_fidelity: false,
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(result.converged);
+
+    // Forward-propagate (r1, v1_mps) under J2 using RK4 to verify
+    let (rf, _vf) = rk4_propagate(&r1, &result.v1, tof, 50_000, &force);
+    let pos_err = (rf - r2).norm();
+    assert!(
+        pos_err < 2.0,
+        "propagated endpoint error = {pos_err:.6e} km (should be < 2 km)"
+    );
+}
+
+/// MPS-IVP with variable fidelity should also converge.
+#[test]
+fn test_mps_ivp_variable_fidelity() {
+    let mu = 398600.4418;
+    let r1 = Vector3::new(7000.0, 0.0, 0.0);
+    let r2 = Vector3::new(0.0, 7000.0, 3000.0);
+    let tof = 2000.0;
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(0),
+    };
+    let sols = solve_lambert(&input).unwrap();
+    let v1_kep = sols[0].v1;
+
+    let force = ZonalGravity::earth_j2();
+    let config = MpsIvpConfig {
+        poly_degree: 120,
+        max_mcpi_iterations: 60,
+        mcpi_tolerance: 1e-12,
+        max_mps_iterations: 15,
+        mps_tolerance: 1e-4,
+        perturbation_scale: 1e-7,
+        variable_fidelity: true, // particular solutions use low-fidelity
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "MPS-IVP variable fidelity should converge, err = {:.6e}",
+        result.terminal_error
+    );
+}
+
+/// Multi-revolution test: solve a 1-rev transfer under two-body and verify
+/// that MPS-IVP recovers the correct solution.
+#[test]
+fn test_mps_ivp_multirev_n1_two_body() {
+    let mu: f64 = 398600.4418;
+    let r_orbit: f64 = 8000.0;
+    let v_circ = (mu / r_orbit).sqrt();
+    let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
+
+    // Transfer from periapsis to a point 60° ahead, with enough tof
+    // for a 1-rev solution to exist.
+    let r1 = Vector3::new(r_orbit, 0.0, 0.0);
+    let theta = 60.0_f64.to_radians();
+    let r2 = Vector3::new(r_orbit * theta.cos(), r_orbit * theta.sin(), 0.0);
+    let tof = period * 1.1; // slightly more than one full orbit
+
+    let input = LambertInput {
+        r1,
+        r2,
+        tof,
+        mu,
+        direction: Direction::Prograde,
+        max_revs: Some(1),
+    };
+    let sols = solve_lambert(&input).unwrap();
+
+    // Find a 1-rev solution
+    let one_rev_sols: Vec<_> = sols.iter().filter(|s| s.n_revs == 1).collect();
+    if one_rev_sols.is_empty() {
+        // No 1-rev solution exists for these parameters — skip
+        return;
+    }
+
+    let v1_kep = one_rev_sols[0].v1;
+
+    let force = TwoBody::new(mu);
+    let config = MpsIvpConfig {
+        poly_degree: 100,
+        max_mcpi_iterations: 50,
+        mcpi_tolerance: 1e-10,
+        max_mps_iterations: 10,
+        mps_tolerance: 1e-3,
+        perturbation_scale: 1e-7,
+        variable_fidelity: false,
+    };
+
+    let result = solve_mps_ivp(&r1, &r2, 0.0, tof, &v1_kep, &force, &config);
+    assert!(
+        result.converged,
+        "MPS-IVP 1-rev two-body should converge, err = {:.6e}",
+        result.terminal_error
+    );
+
+    // Verify propagation consistency
+    let r2_prop = kepler_propagate(&r1, &result.v1, tof, mu);
+    let err = (r2_prop - r2).norm();
+    assert!(
+        err < 1.0,
+        "1-rev propagation error = {err:.6e} km"
+    );
+}
