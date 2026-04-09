@@ -978,7 +978,6 @@ fn test_mps_ivp_variable_fidelity() {
 fn test_mps_ivp_multirev_n1_two_body() {
     let mu: f64 = 398600.4418;
     let r_orbit: f64 = 8000.0;
-    let v_circ = (mu / r_orbit).sqrt();
     let period = 2.0 * std::f64::consts::PI * (r_orbit.powi(3) / mu).sqrt();
 
     // Transfer from periapsis to a point 60° ahead, with enough tof
