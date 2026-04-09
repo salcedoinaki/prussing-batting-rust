@@ -156,32 +156,73 @@ fn ks_accel(
 }
 
 // =========================================================================
-// Fictitious time mapping
+// Gauge-consistent KS endpoint via two-body harmonic oscillator
 // =========================================================================
 
-/// Estimate the total fictitious time Δs for a Keplerian transfer.
+/// Propagate the two-body KS harmonic oscillator from (u1, up1) and find
+/// the fictitious time Δs that matches the physical TOF.
 ///
-/// For a Keplerian orbit, ds = dt / r, so Δs = ∫ dt/r. For a rough
-/// estimate, use the mean-motion relation:
-///   Δs ≈ Δt / ā   where ā ~ (r1 + r2)/2
-/// A better estimate uses the eccentric anomaly: Δs = ΔE / √(μ/a³) · a
-/// For simplicity we use an IVP propagation to map physical times to
-/// fictitious times at CGL nodes.
-fn estimate_fictitious_time(
-    r1: &Vector3<f64>,
-    r2: &Vector3<f64>,
+/// Returns (u2_physical, Δs) where u2_physical is on the correct gauge
+/// fiber for the orbit connecting r1→r2.
+fn ks_two_body_endpoint(
+    u1: &KsVec4,
+    up1: &KsVec4,
+    h: f64,
     dt: f64,
-    mu: f64,
-    a: f64,
-) -> f64 {
-    // For a Keplerian ellipse: mean motion n = sqrt(mu/a^3)
-    // ds = dt/r, and on average r ~ a (for moderate eccentricity)
-    // So Δs ≈ Δt · n = Δt · sqrt(mu/a^3) ... but that's the mean anomaly.
-    // Actually for KS: s maps to half the eccentric anomaly difference.
-    // A safe estimate: Δs = Δt / r_avg
-    let r_avg = (r1.norm() + r2.norm()) / 2.0;
-    let _ = (mu, a); // available for refinement
-    dt / r_avg
+) -> (KsVec4, f64) {
+    let omega = (-h / 2.0).sqrt();
+    let r1 = ks_norm_sq(u1);
+
+    // Initial guess: Δs = Δt / r_avg ≈ Δt / r1
+    let mut ds = dt / r1;
+
+    // Precompute constants for the time integral:
+    //   ||u(s)||² = A + B cos(2ωs) + C sin(2ωs)
+    //   T(Δs) = AΔs + B sin(2ωΔs)/(2ω) + C(1 − cos(2ωΔs))/(2ω)
+    let u1_sq = ks_norm_sq(u1);
+    let up1_sq = ks_norm_sq(up1);
+    let dot = u1[0] * up1[0] + u1[1] * up1[1] + u1[2] * up1[2] + u1[3] * up1[3];
+    let ow2 = omega * omega;
+    let a_c = (u1_sq + up1_sq / ow2) / 2.0;
+    let b_c = (u1_sq - up1_sq / ow2) / 2.0;
+    let c_c = dot / omega;
+
+    // Newton iteration on T(Δs) = dt
+    for _ in 0..30 {
+        let two_omega_ds = 2.0 * omega * ds;
+        let t_computed = a_c * ds
+            + b_c * two_omega_ds.sin() / (2.0 * omega)
+            + c_c * (1.0 - two_omega_ds.cos()) / (2.0 * omega);
+
+        // dT/dΔs = ||u(Δs)||² (position magnitude at endpoint)
+        let cs = (omega * ds).cos();
+        let sn = (omega * ds).sin();
+        let u_end = [
+            u1[0] * cs + up1[0] / omega * sn,
+            u1[1] * cs + up1[1] / omega * sn,
+            u1[2] * cs + up1[2] / omega * sn,
+            u1[3] * cs + up1[3] / omega * sn,
+        ];
+        let r_end = ks_norm_sq(&u_end);
+
+        ds -= (t_computed - dt) / r_end;
+
+        if (t_computed - dt).abs() < 1e-14 * dt {
+            break;
+        }
+    }
+
+    // Final endpoint
+    let cs = (omega * ds).cos();
+    let sn = (omega * ds).sin();
+    let u2 = [
+        u1[0] * cs + up1[0] / omega * sn,
+        u1[1] * cs + up1[1] / omega * sn,
+        u1[2] * cs + up1[2] / omega * sn,
+        u1[3] * cs + up1[3] / omega * sn,
+    ];
+
+    (u2, ds)
 }
 
 // =========================================================================
@@ -252,7 +293,7 @@ pub fn solve_ks_tpbvp(
     t0: f64,
     tf: f64,
     v0_guess: &Vector3<f64>,
-    a_guess: f64,
+    _a_guess: f64,
     force_model: &dyn ForceModel,
     config: &KsTpbvpConfig,
 ) -> KsTpbvpResult {
@@ -261,15 +302,18 @@ pub fn solve_ks_tpbvp(
     let n = config.poly_degree;
 
     // ------------------------------------------------------------------
-    // Step 1: Convert endpoints to KS coordinates
+    // Step 1: Convert departure to KS and find gauge-consistent arrival
     // ------------------------------------------------------------------
     let u1 = cartesian_to_ks(r1);
-    let u2 = cartesian_to_ks(r2);
+    let up1_guess = cartesian_vel_to_ks(&u1, v0_guess);
 
-    // Orbital energy from vis-viva (for the iteration)
+    // Orbital energy from vis-viva
     let r1_mag = r1.norm();
     let v0_sq = v0_guess.norm_squared();
     let h0 = v0_sq / 2.0 - mu / r1_mag;
+
+    // Propagate two-body KS to find gauge-consistent u2 and Δs
+    let (u2, ds_kep) = ks_two_body_endpoint(&u1, &up1_guess, h0, dt);
 
     // ------------------------------------------------------------------
     // Step 2: IVP warm start in Cartesian, then convert to KS
@@ -298,13 +342,12 @@ pub fn solve_ks_tpbvp(
         h_nodes.push(hj);
         r_sum += rj.norm();
     }
-    let r_avg = r_sum / (n + 1) as f64;
+    let _r_avg = r_sum / (n + 1) as f64;
 
     // ------------------------------------------------------------------
-    // Step 3: Estimate fictitious time interval
+    // Step 3: Fictitious time interval from Keplerian propagation
     // ------------------------------------------------------------------
-    let ds_total = dt / r_avg;
-    let mut w = ds_total / 2.0;
+    let mut w = ds_kep / 2.0;
 
     // ------------------------------------------------------------------
     // Step 4: Set up CGL nodes and precompute T_k(τ_j)
