@@ -150,6 +150,105 @@ pub fn solve_perturbed(
     Ok(results)
 }
 
+// =========================================================================
+// Gooding / Lancaster–Blanchard alternative API
+// =========================================================================
+
+/// Solve the Lambert problem using the Gooding/Lancaster–Blanchard algorithm
+/// with default feasibility filtering. Drop-in alternative to
+/// [`solve_lambert`].
+pub fn solve_lambert_gooding(input: &LambertInput) -> Result<Vec<LambertSolution>, LambertError> {
+    let mut solutions = keplerian::gooding::solve_gooding(input)?;
+    let config = FeasibilityConfig::default();
+    keplerian::feasibility::filter_feasibility(
+        &mut solutions,
+        &input.r1,
+        &input.r2,
+        input.mu,
+        &config,
+    );
+    Ok(solutions)
+}
+
+/// Gooding solver with a custom feasibility configuration. Drop-in
+/// alternative to [`solve_lambert_with_config`].
+pub fn solve_lambert_gooding_with_config(
+    input: &LambertInput,
+    config: &FeasibilityConfig,
+) -> Result<Vec<LambertSolution>, LambertError> {
+    let mut solutions = keplerian::gooding::solve_gooding(input)?;
+    keplerian::feasibility::filter_feasibility(
+        &mut solutions,
+        &input.r1,
+        &input.r2,
+        input.mu,
+        config,
+    );
+    Ok(solutions)
+}
+
+/// Unified perturbed solver using the Gooding warm-start. Drop-in
+/// alternative to [`solve_perturbed`] — the caller picks which Keplerian
+/// generator to use by choosing between the two functions.
+pub fn solve_perturbed_gooding(
+    r1: &Vector3<f64>,
+    r2: &Vector3<f64>,
+    tof: f64,
+    mu: f64,
+    force_model: &dyn ForceModel,
+    config: &UnifiedLambertConfig,
+) -> Result<Vec<PerturbedSolution>, LambertError> {
+    // Step 1: Keplerian solutions (via Gooding instead of Prussing).
+    let kep_input = LambertInput {
+        r1: *r1,
+        r2: *r2,
+        tof,
+        mu,
+        direction: config.direction,
+        max_revs: config.max_revs,
+    };
+    let mut kep_solutions = keplerian::gooding::solve_gooding(&kep_input)?;
+    keplerian::feasibility::filter_feasibility(
+        &mut kep_solutions,
+        r1,
+        r2,
+        mu,
+        &config.feasibility,
+    );
+
+    if kep_solutions.is_empty() {
+        return Err(LambertError::NoSolution);
+    }
+
+    // Step 2: Refine each Keplerian solution with the appropriate solver.
+    let pc = &config.perturbed;
+    let mut results = Vec::with_capacity(kep_solutions.len());
+
+    for ksol in &kep_solutions {
+        let algo = select_algorithm(ksol.transfer_angle, ksol.n_revs);
+        let (v1, v2, converged) = refine_solution(
+            r1, r2, tof, &ksol.v1, ksol.a, ksol.transfer_angle, ksol.n_revs,
+            algo, force_model, pc,
+        );
+
+        results.push(PerturbedSolution {
+            v1,
+            v2,
+            a_keplerian: ksol.a,
+            n_revs: ksol.n_revs,
+            branch: ksol.branch,
+            transfer_angle: ksol.transfer_angle,
+            algorithm: algo,
+            converged,
+        });
+    }
+
+    // Sort by v1 magnitude as a delta-v proxy (same as solve_perturbed).
+    results.sort_by(|a, b| a.v1.norm().partial_cmp(&b.v1.norm()).unwrap());
+
+    Ok(results)
+}
+
 /// Drop-in replacement for the old Bates single-revolution solver.
 ///
 /// Returns the minimum-energy N = 0 Keplerian solution only — no perturbed
