@@ -1,7 +1,7 @@
 use crate::error::LambertError;
 use crate::keplerian::geometry::{
-    auxiliary_angles, compute_transfer_geometry, dtof_da, find_a_tmin, time_min_energy,
-    time_min_transfer, time_parabolic, tof_from_a,
+    auxiliary_angles, compute_transfer_geometry, determine_n_max, dtof_da, find_a_tmin,
+    time_min_energy, time_parabolic, tof_from_a,
 };
 use crate::keplerian::velocity::terminal_velocities;
 use crate::types::{Branch, LambertInput, LambertSolution, TransferGeometry};
@@ -87,28 +87,6 @@ pub fn solve_prussing(input: &LambertInput) -> Result<Vec<LambertSolution>, Lamb
     }
 
     Ok(solutions)
-}
-
-/// Find the maximum revolution count whose minimum transfer time does
-/// not exceed the desired time of flight.
-///
-/// Uses `time_min_transfer` (the true minimum elliptic transfer time for
-/// each N) rather than `time_min_energy`, which is the time at the
-/// minimum-energy ellipse — a less restrictive bound.
-fn determine_n_max(geom: &TransferGeometry, tof: f64, mu: f64, max_revs: Option<u32>) -> u32 {
-    let cap = max_revs.unwrap_or(u32::MAX);
-    let mut n: u32 = 0;
-    loop {
-        let next = n + 1;
-        if next > cap {
-            return n;
-        }
-        let t_min_n = time_min_transfer(geom.s, geom.c, geom.theta, next, mu);
-        if t_min_n > tof {
-            return n;
-        }
-        n = next;
-    }
 }
 
 /// Solve for a single branch using bisection with explicit bounds on `a`.
@@ -198,6 +176,11 @@ fn solve_branch(
     let mut lo = a_m * 1.00001;
     let mut hi = a_m * 2.0;
 
+    // Physical cap: no legitimate transfer semi-major axis should ever
+    // exceed ~10⁸·a_min (≈ 4600 AU for a LEO geometry). If we can't
+    // bracket a root inside that, there is no physical solution on
+    // this branch.
+    let hi_cap = geom.a_min * 1e8;
     let f_lo_init = f(lo);
     for _ in 0..60 {
         let f_hi = f(hi);
@@ -205,7 +188,7 @@ fn solve_branch(
             break;
         }
         hi *= 2.0;
-        if hi > 1e15 {
+        if hi > hi_cap {
             return Ok(None);
         }
     }

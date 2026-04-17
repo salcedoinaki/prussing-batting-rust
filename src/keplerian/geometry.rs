@@ -189,6 +189,33 @@ pub fn find_a_tmin(s: f64, c: f64, theta: f64, n_revs: u32, _mu: f64) -> Option<
     Some(a) // return best effort
 }
 
+/// Find the maximum revolution count whose minimum transfer time does
+/// not exceed the desired time of flight.
+///
+/// Uses `time_min_transfer` (the true minimum elliptic transfer time for
+/// each N) rather than `time_min_energy`, which is the time at the
+/// minimum-energy ellipse — a less restrictive bound.
+pub fn determine_n_max(
+    geom: &TransferGeometry,
+    tof: f64,
+    mu: f64,
+    max_revs: Option<u32>,
+) -> u32 {
+    let cap = max_revs.unwrap_or(u32::MAX);
+    let mut n: u32 = 0;
+    loop {
+        let next = n + 1;
+        if next > cap {
+            return n;
+        }
+        let t_min_n = time_min_transfer(geom.s, geom.c, geom.theta, next, mu);
+        if t_min_n > tof {
+            return n;
+        }
+        n = next;
+    }
+}
+
 /// Minimum possible elliptic transfer time for `n_revs ≥ 1` revolutions.
 ///
 /// This is the time at `a_tmin` (blue dots in Paper 2, Fig. 5), NOT the

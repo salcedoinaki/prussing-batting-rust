@@ -21,7 +21,7 @@ use std::f64::consts::PI;
 
 use crate::error::LambertError;
 use crate::keplerian::geometry::{
-    auxiliary_angles, compute_transfer_geometry, find_a_tmin, time_min_energy, time_min_transfer,
+    auxiliary_angles, compute_transfer_geometry, determine_n_max, find_a_tmin, time_min_energy,
     time_parabolic,
 };
 use crate::keplerian::velocity::terminal_velocities;
@@ -189,7 +189,7 @@ fn coarse_pass(
     const N_SAMPLES: usize = 32;
     const REFINE_STEPS: usize = 12;
 
-    let n_max = determine_n_max_local(geom, tof, mu, max_revs);
+    let n_max = determine_n_max(geom, tof, mu, max_revs);
     let mut guesses: Vec<CoarseGuess> = Vec::with_capacity(2 * n_max as usize + 1);
 
     // ----- N = 0 -----
@@ -280,31 +280,6 @@ fn coarse_pass(
     }
 
     guesses
-}
-
-/// Determine the maximum number of complete revolutions whose minimum
-/// elliptic transfer time does not exceed `tof`. Logically identical to
-/// Prussing's private `determine_n_max`; kept local here so the Gooding
-/// module is self-contained.
-fn determine_n_max_local(
-    geom: &TransferGeometry,
-    tof: f64,
-    mu: f64,
-    max_revs: Option<u32>,
-) -> u32 {
-    let cap = max_revs.unwrap_or(u32::MAX);
-    let mut n: u32 = 0;
-    loop {
-        let next = n + 1;
-        if next > cap {
-            return n;
-        }
-        let t_min_n = time_min_transfer(geom.s, geom.c, geom.theta, next, mu);
-        if t_min_n > tof {
-            return n;
-        }
-        n = next;
-    }
 }
 
 // ---------------------------------------------------------------------------
