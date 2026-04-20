@@ -1,12 +1,32 @@
 [package]
 name = "lambert_ult"
 version = "0.1.0"
-edition = "2024"
-description = "Unified Lambert Tool — multi-revolution Keplerian and perturbed Lambert solver"
+edition = "2021"
+description = "Unified Lambert Tool — multi-revolution Keplerian and perturbed Lambert solver with Rustler NIF bindings"
+
+[lib]
+name = "lambert_ult"
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "lambert_cli"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "debug_gooding"
+path = "src/bin/debug_gooding.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["dep:clap"]
 
 [dependencies]
 nalgebra = "0.33"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
+rustler = "0.37.1"
+sgp4 = "2.3.0"
 
 [dev-dependencies]
 approx = "0.5"
