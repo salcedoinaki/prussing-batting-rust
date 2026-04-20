@@ -27,8 +27,11 @@ pub mod constants;
 pub mod error;
 pub mod force_models;
 pub mod keplerian;
+pub mod nif;
 pub mod perturbed;
 pub mod types;
+
+rustler::init!("Elixir.Solsticex.Rust.Solver");
 
 use error::LambertError;
 use force_models::ForceModel;
